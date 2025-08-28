@@ -249,6 +249,9 @@ class JeandleAbstractInterpreter : public StackObj {
   void instanceof(int klass_index);
   void arith_op(BasicType type, Bytecodes::Code code);
 
+  llvm::Value* pop_and_trunc(BasicType src_type, BasicType dst_type);
+  llvm::Value* pop_and_convert(BasicType src_type, BasicType dst_type);
+
   llvm::DenseMap<int, JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
 
   uint32_t next_statepoint_id() { return _statepoint_id++; }
