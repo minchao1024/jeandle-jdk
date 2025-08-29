@@ -18,26 +18,23 @@
  *
  */
 
-#include <cassert>
-#include "llvm/IR/Jeandle/GCStrategy.h"
-#include "llvm/IR/Type.h"
-
-#include "jeandle/jeandleJavaCall.hpp"
-#include "jeandle/jeandleCompilation.hpp"
-#include "jeandle/jeandleUtils.hpp"
+#ifndef CPU_X86_JEANDLEREGISTER_X86_HPP
+#define CPU_X86_JEANDLEREGISTER_X86_HPP
 
 #include "utilities/debug.hpp"
+#include "register_x86.hpp"
 
-llvm::FunctionCallee JeandleJavaCall::callee(llvm::Module& target_module,
-                                             ciMethod* target,
-                                             llvm::Type* return_type,
-                                             std::vector<llvm::Type*>& args_type) {
-  llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, args_type, false);
-  llvm::FunctionCallee callee = target_module.getOrInsertFunction(JeandleFuncSig::method_name(target), func_type);
+#ifdef _LP64
+class JeandleRegister : public AllStatic {
+public:
+  static const char* get_stack_pointer() {
+    return rsp->name();
+  }
 
-  llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
-  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  func->setGC(llvm::jeandle::JeandleGC);
+  static const char* get_current_thread_pointer() {
+    return r15->name();
+  }
+};
+#endif // _LP64
 
-  return callee;
-}
+#endif // CPU_X86_JEANDLEREGISTER_X86_HPP

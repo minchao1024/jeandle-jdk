@@ -651,7 +651,6 @@ void CompileBroker::compilation_init_phase1(JavaThread* THREAD) {
       if (UseJeandleCompiler) {
         llvm::InitializeNativeTarget();
         llvm::InitializeNativeTargetAsmPrinter();
-        llvm::InitializeNativeTargetAsmParser();
         _compilers[1] = JeandleCompiler::create();
       } else
 #endif // JEANDLE
