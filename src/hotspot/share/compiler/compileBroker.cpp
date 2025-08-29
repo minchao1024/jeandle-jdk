@@ -87,7 +87,10 @@
 #include "opto/c2compiler.hpp"
 #endif
 #ifdef JEANDLE
+#pragma push_macro("AARCH64")
+#undef AARCH64
 #include "jeandle/jeandleCompiler.hpp"
+#pragma pop_macro("AARCH64")
 #endif // JEANDLE
 #if INCLUDE_JVMCI
 #include "jvmci/jvmciEnv.hpp"
@@ -648,7 +651,6 @@ void CompileBroker::compilation_init_phase1(JavaThread* THREAD) {
       if (UseJeandleCompiler) {
         llvm::InitializeNativeTarget();
         llvm::InitializeNativeTargetAsmPrinter();
-        llvm::InitializeNativeTargetAsmParser();
         _compilers[1] = JeandleCompiler::create();
       } else
 #endif // JEANDLE

@@ -25,6 +25,7 @@
 #include "jeandle/jeandleAssembler.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleCompiledCode.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
 
 #include "utilities/debug.hpp"
 #include "asm/macroAssembler.hpp"
@@ -74,9 +75,24 @@ class JeandleConstReloc : public JeandleReloc {
   address _target;
 };
 
+class JeandleCallVMReloc : public JeandleReloc {
+ public:
+  JeandleCallVMReloc(LinkBlock& block, LinkEdge& edge, address target) :
+    JeandleReloc(block.getAddress().getValue() + edge.getOffset()),
+    _target(target) {}
+
+  void emit_reloc(JeandleAssembler& assembler) override {
+    assembler.patch_call_vm(offset(), _target);
+  }
+
+ private:
+  address _target;
+};
+
 class JeandleCallReloc : public JeandleReloc {
  public:
-  JeandleCallReloc(CallSiteInfo* call) : JeandleReloc(call->inst_offset()),
+  JeandleCallReloc(CallSiteInfo* call) :
+    JeandleReloc(call->inst_offset() - JeandleJavaCall::call_site_size(call->type())),
     _call(call) {}
 
   void emit_reloc(JeandleAssembler& assembler) override {
@@ -130,7 +146,7 @@ void JeandleCompiledCode::finalize() {
   uint64_t align;
   uint64_t offset;
   uint64_t code_size;
-  if (!ReadELF::findFunc(*_elf, FuncSigAnalyze::method_name(_method), align, offset, code_size)) {
+  if (!ReadELF::findFunc(*_elf, _func_name, align, offset, code_size)) {
     JeandleCompilation::report_jeandle_error("compiled function is not found in the ELF file");
     return;
   }
@@ -149,8 +165,10 @@ void JeandleCompiledCode::finalize() {
   masm->set_oop_recorder(_env->oop_recorder());
   JeandleAssembler assembler(masm);
 
-  if (!_method->is_static())
+  if (_method && !_method->is_static()) {
+    // For Java method finalization.
     assembler.emit_ic_check();
+  }
 
   // TODO: NativeJump::patch_verified_entry requires the first instruction of verified entry >= 5 bytes.
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
@@ -168,27 +186,10 @@ void JeandleCompiledCode::finalize() {
   _offsets.set_value(CodeOffsets::Exceptions, 0);
 }
 
-// Get the frame size from .stack_sizes section.
-void JeandleCompiledCode::setup_frame_size() {
-  SectionInfo section_info(".stack_sizes");
-  if (!ReadELF::findSection(*_elf, section_info)) {
-    JeandleCompilation::report_jeandle_error(".stack_sizes section not found");
-    return;
-  }
-  llvm::DataExtractor data_extractor(llvm::StringRef(((char*)_obj->getBufferStart()) + section_info._offset, section_info._size),
-                                     true/* IsLittleEndian */, oopSize/* AddressSize */);
-  uint64_t offset = 0;
-  data_extractor.getUnsigned(&offset, oopSize);
-  uint64_t stack_size = data_extractor.getULEB128(&offset);
-  uint64_t frame_size = stack_size + oopSize/* return address */;
-  assert(frame_size % StackAlignmentInBytes == 0, "frame size must be aligned");
-  _frame_size = frame_size / oopSize;
-}
-
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   llvm::SmallVector<JeandleReloc*> relocs;
 
-  // Step1: Resolve LinkGraph.
+  // Step 1: Resolve LinkGraph.
   auto ssp = std::make_shared<llvm::orc::SymbolStringPool>();
 
   auto graph_on_err = llvm::jitlink::createLinkGraphFromObject(_elf->getMemoryBufferRef(), ssp);
@@ -200,25 +201,44 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   auto link_graph = std::move(*graph_on_err);
 
   for (auto *block : link_graph->blocks()) {
+    // Only resolve relocations for instructions in the compiled method.
+    if (block->getSection().getName().compare(".text") != 0) {
+      continue;
+    }
     for (auto& edge : block->edges()) {
       auto& target = edge.getTarget();
 
-      if (target.isDefined() && target.getSection().getName().starts_with(".rodata")) {
-        // Const relocatinos.
+      if (!target.isDefined() && JeandleAssembler::is_call_vm_reloc_kind(edge.getKind())) {
+        // Call VM relocations.
+        address target_addr = JeandleRuntimeRoutine::get_stub_entry(*target.getName());
+        JeandleCallVMReloc* call_vm_reloc = new JeandleCallVMReloc(*block, edge, target_addr);
+
+        uint32_t call_inst_offset = JeandleAssembler::fixup_call_inst_offset(call_vm_reloc->offset());
+
+        // TODO: Set the right bci.
+        _safepoints[call_inst_offset] = new CallSiteInfo(0/* statepoint_id */, JeandleJavaCall::STATIC_CALL, target_addr, 0/* bci */);
+        relocs.push_back(call_vm_reloc);
+
+      } else if (target.isDefined() && JeandleAssembler::is_const_reloc_kind(edge.getKind())) {
+        // Const relocations.
+        assert(target.getSection().getName().starts_with(".rodata"), "invalid const section");
         address target_addr = resolve_const_edge(*block, edge, assembler);
         if (target_addr == nullptr) {
           return;
         }
         relocs.push_back(new JeandleConstReloc(*block, edge, target_addr));
-      } else if (!target.isDefined() && edge.getKind() == assembler.get_oop_reloc_kind()) {
+      } else if (!target.isDefined() && JeandleAssembler::is_oop_reloc_kind(edge.getKind())) {
         // Oop relocations.
         assert((*(target.getName())).starts_with("oop_handle"), "invalid oop relocation name");
         relocs.push_back(new JeandleOopReloc(block->getAddress().getValue() + edge.getOffset(), _oop_handles[(*(target.getName()))]));
+      } else {
+        // Unhandled relocations
+        ShouldNotReachHere();
       }
     }
   }
 
-  // Step2: Resolve stackmaps.
+  // Step 2: Resolve stackmaps.
   SectionInfo section_info(".llvm_stackmaps");
   if (ReadELF::findSection(*_elf, section_info)) {
     llvm::StackMapParser<ELFT::Endianness> stackmaps(llvm::ArrayRef(((uint8_t*)object_start()) +
@@ -245,6 +265,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         DebugToken *expvals = _env->debug_info()->create_scope_values(exparray);
         DebugToken *monvals = _env->debug_info()->create_monitor_values(monarray);
 
+        assert(_method, "invalid Java method");
         _env->debug_info()->describe_scope(inst_offset,
                                           methodHandle(),
                                           _method,
@@ -260,16 +281,19 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
                                           monvals);
 
         _env->debug_info()->end_safepoint(inst_offset);
+
+      } else if (CallSiteInfo* safepoint = _safepoints[record->getInstructionOffset()]) {
+        // TODO: Add debug information for safepoints.
       }
     }
   }
 
-  // Step3: Sort jeandle relocs.
+  // Step 3: Sort jeandle relocs.
   llvm::sort(relocs.begin(), relocs.end(), [](const JeandleReloc* lhs, const JeandleReloc* rhs) {
       return lhs->offset() < rhs->offset();
   });
 
-  // Step4: Emit jeandle relocs.
+  // Step 4: Emit jeandle relocs.
   for (JeandleReloc* reloc : relocs) {
     reloc->emit_reloc(assembler);
   }

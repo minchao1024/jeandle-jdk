@@ -22,8 +22,11 @@
 #define SHARE_JEANDLE_COMPILER_HPP
 
 #include <cassert>
+#pragma push_macro("AARCH64")
+#undef AARCH64
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Target/TargetMachine.h"
+#pragma pop_macro("AARCH64")
 
 #include <memory>
 
@@ -60,7 +63,7 @@ class JeandleCompiler : public AbstractCompiler {
   // Read the template file into a global read-only memory buffer to ensure thread safety.
   std::unique_ptr<llvm::MemoryBuffer> _template_buffer;
 
-  void initialize_template_buffer();
+  bool initialize_template_buffer();
 };
 
 #endif // SHARE_JEANDLE_COMPILER_HPP
