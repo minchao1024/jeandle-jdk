@@ -671,23 +671,23 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       // Conversions:
 
-      case Bytecodes::_i2l: _jvm->lpush(_ir_builder.CreateIntCast(_jvm->ipop(), JeandleType::java2llvm(BasicType::T_LONG, *_context), true)); break;
+      case Bytecodes::_i2l: _jvm->lpush(_ir_builder.CreateSExt(_jvm->ipop(), JeandleType::java2llvm(BasicType::T_LONG, *_context))); break;
       case Bytecodes::_i2f: _jvm->fpush(_ir_builder.CreateSIToFP(_jvm->ipop(), JeandleType::java2llvm(BasicType::T_FLOAT, *_context))); break;
       case Bytecodes::_i2d: _jvm->dpush(_ir_builder.CreateSIToFP(_jvm->ipop(), JeandleType::java2llvm(BasicType::T_DOUBLE, *_context))); break;
-      case Bytecodes::_i2b: _jvm->ipush(_ir_builder.CreateSExt(pop_and_trunc(T_INT, T_BYTE), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
-      case Bytecodes::_i2c: _jvm->ipush(_ir_builder.CreateZExt(pop_and_trunc(T_INT, T_CHAR), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
-      case Bytecodes::_i2s: _jvm->ipush(_ir_builder.CreateSExt(pop_and_trunc(T_INT, T_SHORT), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
+      case Bytecodes::_i2b: _jvm->ipush(_ir_builder.CreateSExt(_ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt8Ty(*_context)), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
+      case Bytecodes::_i2c: _jvm->ipush(_ir_builder.CreateZExt(_ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt16Ty(*_context)), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
+      case Bytecodes::_i2s: _jvm->ipush(_ir_builder.CreateSExt(_ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt16Ty(*_context)), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
 
-      case Bytecodes::_l2i: _jvm->ipush(_ir_builder.CreateIntCast(_jvm->lpop(), JeandleType::java2llvm(BasicType::T_INT, *_context), true)); break;
+      case Bytecodes::_l2i: _jvm->ipush(_ir_builder.CreateTrunc(_jvm->lpop(), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
       case Bytecodes::_l2f: _jvm->fpush(_ir_builder.CreateSIToFP(_jvm->lpop(), JeandleType::java2llvm(BasicType::T_FLOAT, *_context))); break;
       case Bytecodes::_l2d: _jvm->dpush(_ir_builder.CreateSIToFP(_jvm->lpop(), JeandleType::java2llvm(BasicType::T_DOUBLE, *_context))); break;
 
-      case Bytecodes::_f2i: _jvm->ipush(pop_and_convert(T_FLOAT, T_INT)); break;
-      case Bytecodes::_f2l: _jvm->lpush(pop_and_convert(T_FLOAT, T_LONG)); break;
+      case Bytecodes::_f2i: fptosi_sat(_jvm->fpop(), T_INT); break;
+      case Bytecodes::_f2l: fptosi_sat(_jvm->fpop(), T_LONG); break;
       case Bytecodes::_f2d: _jvm->dpush(_ir_builder.CreateFPExt(_jvm->fpop(), JeandleType::java2llvm(BasicType::T_DOUBLE, *_context))); break;
 
-      case Bytecodes::_d2i: _jvm->ipush(pop_and_convert(T_DOUBLE, T_INT)); break;
-      case Bytecodes::_d2l: _jvm->lpush(pop_and_convert(T_DOUBLE, T_LONG)); break;
+      case Bytecodes::_d2i: fptosi_sat(_jvm->dpop(), T_INT); break;
+      case Bytecodes::_d2l: fptosi_sat(_jvm->dpop(), T_LONG); break;
       case Bytecodes::_d2f: _jvm->fpush(_ir_builder.CreateFPTrunc(_jvm->dpop(), JeandleType::java2llvm(BasicType::T_FLOAT, *_context))); break;
 
       // Comparisons:
@@ -1144,66 +1144,10 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
   }
 }
 
-llvm::Value* JeandleAbstractInterpreter::pop_and_trunc(BasicType src_type, BasicType dst_type) {
-  llvm::Value* src = nullptr;
-  llvm::Type* dst_t = nullptr;
-  switch (src_type) {
-    case BasicType::T_INT: src = _jvm->ipop(); break;
-    case BasicType::T_LONG: src = _jvm->lpop(); break;
-    default: ShouldNotReachHere();
-  }
-  switch (dst_type) {
-    case BasicType::T_BYTE: dst_t = llvm::Type::getInt8Ty(*_context); break;
-    case BasicType::T_CHAR: // fall through
-    case BasicType::T_SHORT: dst_t = llvm::Type::getInt16Ty(*_context); break;
-    case BasicType::T_INT: dst_t = llvm::Type::getInt32Ty(*_context); break;
-    default: ShouldNotReachHere();
-  }
-  return _ir_builder.CreateTrunc(src, dst_t);
-}
-
-llvm::Value* JeandleAbstractInterpreter::pop_and_convert(BasicType src_type, BasicType dst_type) {
-  llvm::Value* src = nullptr;
-  llvm::ConstantInt* constMax = nullptr;
-  llvm::ConstantInt* constMin = nullptr;
-  llvm::ConstantInt* constZero = nullptr;
-
-  switch (dst_type) {
-    case BasicType::T_INT: {
-      constMax = JeandleType::int_const(_ir_builder, INT_MAX);
-      constMin = JeandleType::int_const(_ir_builder, INT_MIN);
-      constZero = JeandleType::int_const(_ir_builder, 0);
-      break;
-    }
-    case BasicType::T_LONG: {
-      constMax = JeandleType::long_const(_ir_builder, LONG_MAX);
-      constMin = JeandleType::long_const(_ir_builder, LONG_MIN);
-      constZero = JeandleType::long_const(_ir_builder, 0);
-      break;
-    }
-    default: ShouldNotReachHere();
-  }
-  switch (src_type) {
-    case BasicType::T_FLOAT: src = _jvm->fpop(); break;
-    case BasicType::T_DOUBLE: src = _jvm->dpop(); break;
-    default: ShouldNotReachHere();
-  }
-
-  llvm::Value* constMaxF = _ir_builder.CreateSIToFP(constMax, JeandleType::java2llvm(src_type, *_context));
-  llvm::Value* constMinF = _ir_builder.CreateSIToFP(constMin, JeandleType::java2llvm(src_type, *_context));
-
-  llvm::Value* c1 = _ir_builder.CreateFCmpOGE(src, constMaxF);
-  llvm::Value* v1 = _ir_builder.CreateSelect(c1, constMax, constZero);
-
-  llvm::Value* c2 = _ir_builder.CreateFCmpOLE(src, constMinF);
-  llvm::Value* v2 = _ir_builder.CreateSelect(c2, constMin, v1);
-
-  llvm::Value* c3 = _ir_builder.CreateFCmpUGE(src, constMaxF);
-  llvm::Value* c4 = _ir_builder.CreateOr(c2, c3);
-
-  llvm::Value* v3 = _ir_builder.CreateFPToSI(src, JeandleType::java2llvm(dst_type, *_context));
-
-  return _ir_builder.CreateSelect(c4, v2, v3);
+void JeandleAbstractInterpreter::fptosi_sat(llvm::Value* value, BasicType type) {
+  llvm::Function* fptosi_sat = llvm::Intrinsic::getDeclaration(&_module, llvm::Intrinsic::fptosi_sat, {JeandleType::java2llvm(type, *_context), value->getType()});
+  llvm::CallInst* call = _ir_builder.CreateCall(fptosi_sat, {value});
+  _jvm->push(type, call);
 }
 
 // TODO: clinit_barrier check.
