@@ -1147,7 +1147,7 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
 }
 
 void JeandleAbstractInterpreter::fptosi_sat(llvm::Value* value, BasicType type) {
-  llvm::Function* fptosi_sat = llvm::Intrinsic::getDeclaration(&_module, llvm::Intrinsic::fptosi_sat, {JeandleType::java2llvm(type, *_context), value->getType()});
+  llvm::Function* fptosi_sat = llvm::Intrinsic::getOrInsertDeclaration(&_module, llvm::Intrinsic::fptosi_sat, {JeandleType::java2llvm(type, *_context), value->getType()});
   llvm::CallInst* call = _ir_builder.CreateCall(fptosi_sat, {value});
   _jvm->push(type, call);
 }
