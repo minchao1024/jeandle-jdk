@@ -23,9 +23,10 @@
  * @library /test/lib
  * @build jdk.test.lib.Asserts
  * @run main/othervm -XX:-TieredCompilation -Xcomp -Xbatch
- *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestTypeConversion::test*
- *      -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.TestTypeConversion::testWideningConversion
- *      -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.TestTypeConversion::testNarrowingConversion
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestTypeConversion::testi2*
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestTypeConversion::testl2*
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestTypeConversion::testf2*
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestTypeConversion::testd2*
  *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestTypeConversion
  */
 
