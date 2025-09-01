@@ -682,12 +682,12 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_l2f: _jvm->fpush(_ir_builder.CreateSIToFP(_jvm->lpop(), JeandleType::java2llvm(BasicType::T_FLOAT, *_context))); break;
       case Bytecodes::_l2d: _jvm->dpush(_ir_builder.CreateSIToFP(_jvm->lpop(), JeandleType::java2llvm(BasicType::T_DOUBLE, *_context))); break;
 
-      case Bytecodes::_f2i: fptosi_sat(_jvm->fpop(), T_INT); break;
-      case Bytecodes::_f2l: fptosi_sat(_jvm->fpop(), T_LONG); break;
+      case Bytecodes::_f2i: _jvm->ipush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_INT, *_context), llvm::Intrinsic::fptosi_sat, {_jvm->fpop()})); break;
+      case Bytecodes::_f2l: _jvm->lpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_LONG, *_context), llvm::Intrinsic::fptosi_sat, {_jvm->fpop()})); break;
       case Bytecodes::_f2d: _jvm->dpush(_ir_builder.CreateFPExt(_jvm->fpop(), JeandleType::java2llvm(BasicType::T_DOUBLE, *_context))); break;
 
-      case Bytecodes::_d2i: fptosi_sat(_jvm->dpop(), T_INT); break;
-      case Bytecodes::_d2l: fptosi_sat(_jvm->dpop(), T_LONG); break;
+      case Bytecodes::_d2i: _jvm->ipush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_INT, *_context), llvm::Intrinsic::fptosi_sat, {_jvm->dpop()})); break;
+      case Bytecodes::_d2l: _jvm->lpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_LONG, *_context), llvm::Intrinsic::fptosi_sat, {_jvm->dpop()})); break;
       case Bytecodes::_d2f: _jvm->fpush(_ir_builder.CreateFPTrunc(_jvm->dpop(), JeandleType::java2llvm(BasicType::T_FLOAT, *_context))); break;
 
       // Comparisons:
@@ -1144,12 +1144,6 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     }
     default: ShouldNotReachHere();
   }
-}
-
-void JeandleAbstractInterpreter::fptosi_sat(llvm::Value* value, BasicType type) {
-  llvm::Function* fptosi_sat = llvm::Intrinsic::getOrInsertDeclaration(&_module, llvm::Intrinsic::fptosi_sat, {JeandleType::java2llvm(type, *_context), value->getType()});
-  llvm::CallInst* call = _ir_builder.CreateCall(fptosi_sat, {value});
-  _jvm->push(type, call);
 }
 
 // TODO: clinit_barrier check.
