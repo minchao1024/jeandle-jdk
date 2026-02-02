@@ -25,6 +25,15 @@
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xcomp -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-TieredCompilation
  *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitor::addCounter
+ *                   -XX:+UnlockExperimentalVMOptions -XX:LockingMode=0
+ *                   -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestMonitor
+ * @run main/othervm -Xcomp -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-TieredCompilation
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitor::addCounter
+ *                   -XX:+UnlockExperimentalVMOptions -XX:LockingMode=1
+ *                   -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestMonitor
+ * @run main/othervm -Xcomp -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-TieredCompilation
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitor::addCounter
+ *                   -XX:+UnlockExperimentalVMOptions -XX:LockingMode=2
  *                   -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestMonitor
  */
 
