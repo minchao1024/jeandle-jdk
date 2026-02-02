@@ -636,6 +636,14 @@ void JeandleAbstractInterpreter::interpret() {
   if (_method && _method->is_synchronized()) {
     JeandleCompilation::current()->set_has_monitors(true);
     _jvm = _block_builder->entry_block()->VM_state();
+
+    // Strictly reserve 'entry' for allocas to ensure static stack allocation.
+    // This prevents dynamic RSP adjustments and ensures valid StackMap generation for GC.
+    llvm::BasicBlock* sync_method_lock = llvm::BasicBlock::Create(*_context, "sync_method_lock", _llvm_func);
+    _ir_builder.CreateBr(sync_method_lock);
+    _ir_builder.SetInsertPoint(sync_method_lock);
+    _block_builder->entry_block()->set_tail_llvm_block(sync_method_lock);
+
     // Setup Object Pointer
     llvm::Value* lock_obj = nullptr;
     if (_method->is_static()) {
@@ -646,8 +654,11 @@ void JeandleAbstractInterpreter::interpret() {
       lock_obj = _jvm->locals_at(0);
     }
 
-    llvm::Value* lock = _ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
-                                                 llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+    // Allocate a BasicLock on stack.
+    // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
+    llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
+    llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                            llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
     // record object and lock for synchronized method
     TypedValue obj(BasicType::T_OBJECT, lock_obj);
     _sync_lock.set_object(obj);
