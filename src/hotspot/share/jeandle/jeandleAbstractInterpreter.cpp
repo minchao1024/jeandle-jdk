@@ -2534,18 +2534,89 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
 
   _jvm->push_lock(lock);
 
+  int cur_bci;
+  if (_block == nullptr) {
+    cur_bci = -1;
+  } else {
+    cur_bci = _bytecodes.cur_bci();
+  }
+
+  llvm::BasicBlock* monitorenter_slow_path = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitorenter_slow_path", _llvm_func);
+  llvm::BasicBlock* monitor_entered = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitor_entered", _llvm_func);
+
+  if (DiagnoseSyncOnValueBasedClasses != 0) {
+    // TODO: implement DiagnoseSyncOnValueBasedClasses.
+  }
+
+#if INCLUDE_RTM_OPT
+  if (UseRTMForStackLocks) {
+    // TODO: implement UseRTMForStackLocks.
+    log_info(fastlock)("UseRTMForStackLocks not implemented.");
+  }
+#endif // INCLUDE_RTM_OPT
+
+  llvm::CallInst* call;
+  if (LockingMode == LM_MONITOR) {
+    call = call_java_op("jeandle.monitorenter_with_monitor_lock", {lock.object().value(), lock.lock()});
+  } else if (LockingMode == LM_LEGACY) {
+    call = call_java_op("jeandle.monitorenter_with_thin_lock", {lock.object().value(), lock.lock()});
+  } else {
+    assert(LockingMode == LM_LIGHTWEIGHT, "");
+    call = call_java_op("jeandle.monitorenter_with_lightweight_lock", {lock.object().value(), lock.lock()});
+  }
+  _ir_builder.CreateCondBr(call, monitor_entered, monitorenter_slow_path);
+
+  _ir_builder.SetInsertPoint(monitorenter_slow_path);
+
   llvm::FunctionCallee monitorenter_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_locking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {lock.object().value(), lock.lock(), current_thread});
   call_monitorenter->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  _ir_builder.CreateBr(monitor_entered);
+
+  _ir_builder.SetInsertPoint(monitor_entered);
+  if (_block == nullptr) {
+    _block_builder->entry_block()->set_tail_llvm_block(monitor_entered);
+  } else {
+    _block->set_tail_llvm_block(monitor_entered);
+  }
 }
 
 void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   assert(!lock.is_null(), "sanity");
+
+  int cur_bci = _bytecodes.cur_bci();
+
+  llvm::BasicBlock* monitorexit_slow_path = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitorexit_slow_path", _llvm_func);
+  llvm::BasicBlock* monitor_exited = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitor_exited", _llvm_func);
+
+#if INCLUDE_RTM_OPT
+  if (UseRTMForStackLocks) {
+    // TODO: implement UseRTMForStackLocks.
+    log_info(fastlock)("UseRTMForStackLocks not implemented.");
+  }
+#endif // INCLUDE_RTM_OPT
+
+  llvm::CallInst* call;
+  if (LockingMode == LM_MONITOR) {
+    call = call_java_op("jeandle.monitorexit_with_monitor_lock", {lock.object().value(), lock.lock()});
+  } else if (LockingMode == LM_LEGACY) {
+    call = call_java_op("jeandle.monitorexit_with_thin_lock", {lock.object().value(), lock.lock()});
+  } else {
+    assert(LockingMode == LM_LIGHTWEIGHT, "");
+    call = call_java_op("jeandle.monitorexit_with_lightweight_lock", {lock.object().value(), lock.lock()});
+  }
+  _ir_builder.CreateCondBr(call, monitor_exited, monitorexit_slow_path);
+
+  _ir_builder.SetInsertPoint(monitorexit_slow_path);
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
   call_monitorexit->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  _ir_builder.CreateBr(monitor_exited);
+
+  _ir_builder.SetInsertPoint(monitor_exited);
+  _block->set_tail_llvm_block(monitor_exited);
 }
 
 void JeandleAbstractInterpreter::monitorenter() {

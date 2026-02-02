@@ -215,12 +215,12 @@ ifneq ($(filter jdk, $(MAKECMDGOALS)), )
 endif
 
 ################################################################################
-# Copy the template module file for Jeandle
+# Merge the template module file for Jeandle
 ifeq ($(INCLUDE_JEANDLE), true)
-  $(eval $(call SetupCopyFiles, COPY_JEANDLE_TEMPLATE, \
+  $(eval $(call SetupMergeFiles, COPY_JEANDLE_TEMPLATE, \
       SRC := $(TOPDIR)/src/hotspot/share/jeandle/templatemodule/, \
       DEST := $(JDK_IMAGE_DIR)/lib/server/, \
-      FILES := template.ll, \
+      FILES := template.ll template_${OPENJDK_TARGET_CPU_ARCH}.ll, \
   ))
 
   JDK_TARGETS += $(COPY_JEANDLE_TEMPLATE)
