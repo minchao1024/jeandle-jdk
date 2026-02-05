@@ -636,13 +636,14 @@ void JeandleAbstractInterpreter::interpret() {
   if (_method && _method->is_synchronized()) {
     JeandleCompilation::current()->set_has_monitors(true);
     _jvm = _block_builder->entry_block()->VM_state();
+    _block = _block_builder->entry_block();
 
     // Strictly reserve 'entry' for allocas to ensure static stack allocation.
     // This prevents dynamic RSP adjustments and ensures valid StackMap generation for GC.
     llvm::BasicBlock* sync_method_lock = llvm::BasicBlock::Create(*_context, "sync_method_lock", _llvm_func);
     _ir_builder.CreateBr(sync_method_lock);
     _ir_builder.SetInsertPoint(sync_method_lock);
-    _block_builder->entry_block()->set_tail_llvm_block(sync_method_lock);
+    _block->set_tail_llvm_block(sync_method_lock);
 
     // Setup Object Pointer
     llvm::Value* lock_obj = nullptr;
@@ -2534,6 +2535,7 @@ void JeandleAbstractInterpreter::multianewarray() {
 
 void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
   assert(lock.object().value() != nullptr, "sanity");
+  assert(_block != nullptr, "sanity");
 
   if (lock.lock() == nullptr) {
     // Allocate a BasicLock on stack.
@@ -2545,12 +2547,7 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
 
   _jvm->push_lock(lock);
 
-  int cur_bci;
-  if (_block == nullptr) {
-    cur_bci = -1;
-  } else {
-    cur_bci = _bytecodes.cur_bci();
-  }
+  int cur_bci = _bytecodes.cur_bcp() == nullptr ? -1 : _bytecodes.cur_bci();
 
   llvm::BasicBlock* monitorenter_slow_path = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitorenter_slow_path", _llvm_func);
   llvm::BasicBlock* monitor_entered = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitor_entered", _llvm_func);
@@ -2558,13 +2555,6 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
   if (DiagnoseSyncOnValueBasedClasses != 0) {
     // TODO: implement DiagnoseSyncOnValueBasedClasses.
   }
-
-#if INCLUDE_RTM_OPT
-  if (UseRTMForStackLocks) {
-    // TODO: implement UseRTMForStackLocks.
-    log_info(fastlock)("UseRTMForStackLocks not implemented.");
-  }
-#endif // INCLUDE_RTM_OPT
 
   llvm::CallInst* call;
   if (LockingMode == LM_MONITOR) {
@@ -2586,11 +2576,7 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
   _ir_builder.CreateBr(monitor_entered);
 
   _ir_builder.SetInsertPoint(monitor_entered);
-  if (_block == nullptr) {
-    _block_builder->entry_block()->set_tail_llvm_block(monitor_entered);
-  } else {
-    _block->set_tail_llvm_block(monitor_entered);
-  }
+  _block->set_tail_llvm_block(monitor_entered);
 }
 
 void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
@@ -2600,13 +2586,6 @@ void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
 
   llvm::BasicBlock* monitorexit_slow_path = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitorexit_slow_path", _llvm_func);
   llvm::BasicBlock* monitor_exited = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitor_exited", _llvm_func);
-
-#if INCLUDE_RTM_OPT
-  if (UseRTMForStackLocks) {
-    // TODO: implement UseRTMForStackLocks.
-    log_info(fastlock)("UseRTMForStackLocks not implemented.");
-  }
-#endif // INCLUDE_RTM_OPT
 
   llvm::CallInst* call;
   if (LockingMode == LM_MONITOR) {
