@@ -68,11 +68,11 @@ check_candidate_thread:
   br i1 %has_no_candidate_threads, label %return_false, label %try_release_monitor
 
 clear_monitor_owner:
-  store atomic volatile i64 0, ptr %owner_addr seq_cst, align 8
+  store atomic volatile i64 0, ptr %owner_addr release, align 8
   br label %return_true
 
 try_release_monitor:
-  store atomic volatile i64 0, ptr %owner_addr seq_cst, align 8
+  store atomic volatile i64 0, ptr %owner_addr release, align 8
   fence seq_cst
   %new_succ = load atomic i64, ptr %succ_addr unordered, align 8
   %is_candidate_thread_null = icmp eq i64 %new_succ, 0

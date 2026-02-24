@@ -50,9 +50,12 @@
 @oopDesc.klass_offset_in_bytes = external global i32
 @oopDesc.mark_offset_in_bytes = external global i32
 
+; Byte offsets for BasicLock structure fields.
+@BasicLock.displaced_header_offset_in_bytes = external global i32
+
 ; Byte offsets for JavaThread structure fields.
 @JavaThread.held_monitor_count_offset = external global i32
-@JavaThread.lock_stack_top_cmp_value = external global i32
+@JavaThread.lock_stack_end = external global i32
 @JavaThread.lock_stack_top_offset = external global i32
 
 ; Byte offsets for ObjectMonitor structure fields.
@@ -338,7 +341,8 @@ entry:
   %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %current_thread_as_int = ptrtoint ptr %current_thread to i64
   %monitor_cas = cmpxchg ptr %owner_addr, i64 0, i64 %current_thread_as_int acq_rel monotonic, align 8
-  %destory_lock_record_addr = getelementptr inbounds i8, ptr %lock, i32 0
+  %displaced_header_offset = load i32, ptr @BasicLock.displaced_header_offset_in_bytes
+  %destory_lock_record_addr = getelementptr inbounds i8, ptr %lock, i32 %displaced_header_offset
   %unused_mark_value = load i64, ptr @markWord.unused_mark_value
   store atomic i64 %unused_mark_value, ptr %destory_lock_record_addr unordered, align 8
   %monitor_acquied = extractvalue { i64, i1 } %monitor_cas, 1
@@ -367,24 +371,24 @@ return_false:
 ; Increment held_monitor_count in JavaThread
 define hotspotcc void @jeandle.increment_lock_count() "lower-phase"="0" {
 entry:
-  %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %held_monitor_count_offset = load i32, ptr @JavaThread.held_monitor_count_offset
-  %held_monitor_count_addr = getelementptr inbounds i8, ptr %current_thread, i32 %held_monitor_count_offset
-  %held_monitor_count = load atomic i64, ptr %held_monitor_count_addr unordered, align 8
+  %held_monitor_count_offset_zext = zext i32 %held_monitor_count_offset to i64
+  %held_monitor_count_addr = inttoptr i64 %held_monitor_count_offset_zext to ptr addrspace(2)
+  %held_monitor_count = load atomic i64, ptr addrspace(2) %held_monitor_count_addr unordered, align 8
   %new_held_monitor_count = add i64 %held_monitor_count, 1
-  store atomic i64 %new_held_monitor_count, ptr %held_monitor_count_addr unordered, align 8
+  store atomic i64 %new_held_monitor_count, ptr addrspace(2) %held_monitor_count_addr unordered, align 8
   ret void
 }
 
 ; Decrement held_monitor_count in JavaThread
 define hotspotcc void @jeandle.decrement_lock_count() "lower-phase"="0" {
 entry:
-  %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %held_monitor_count_offset = load i32, ptr @JavaThread.held_monitor_count_offset
-  %held_monitor_count_addr = getelementptr inbounds i8, ptr %current_thread, i32 %held_monitor_count_offset
-  %held_monitor_count = load atomic i64, ptr %held_monitor_count_addr unordered, align 8
+  %held_monitor_count_offset_zext = zext i32 %held_monitor_count_offset to i64
+  %held_monitor_count_addr = inttoptr i64 %held_monitor_count_offset_zext to ptr addrspace(2)
+  %held_monitor_count = load atomic i64, ptr addrspace(2) %held_monitor_count_addr unordered, align 8
   %new_held_monitor_count = sub i64 %held_monitor_count, 1
-  store atomic i64 %new_held_monitor_count, ptr %held_monitor_count_addr unordered, align 8
+  store atomic i64 %new_held_monitor_count, ptr addrspace(2) %held_monitor_count_addr unordered, align 8
   ret void
 }
 
@@ -395,9 +399,9 @@ entry:
   br i1 %is_debug, label %debug_path, label %release_path
 
 debug_path:
-  %current_thread = call hotspotcc ptr @jeandle.current_thread()
-  %clear_oop_addr = getelementptr inbounds i8, ptr %current_thread, i32 %lock_stack_top
-  store atomic i64 0, ptr %clear_oop_addr unordered, align 8
+  %lock_stack_top_zext = zext i32 %lock_stack_top to i64
+  %clear_oop_addr = inttoptr i64 %lock_stack_top_zext to ptr addrspace(2)
+  store atomic i64 0, ptr addrspace(2) %clear_oop_addr unordered, align 8
   ret void
 
 release_path:
@@ -478,12 +482,12 @@ entry:
   br i1 %is_inflated, label %monitor_lock_fast_path, label %lightweight_lock_path
 
 lightweight_lock_path:
-  %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %lock_stack_top_offset = load i32, ptr @JavaThread.lock_stack_top_offset
-  %lock_stack_top_addr = getelementptr inbounds i8, ptr %current_thread, i32 %lock_stack_top_offset
-  %lock_stack_top = load atomic i32, ptr %lock_stack_top_addr unordered, align 4
-  %lock_stack_top_cmp_value = load i32, ptr @JavaThread.lock_stack_top_cmp_value
-  %is_lock_stack_full = icmp sgt i32 %lock_stack_top, %lock_stack_top_cmp_value
+  %lock_stack_top_offset_zext = zext i32 %lock_stack_top_offset to i64
+  %lock_stack_top_addr = inttoptr i64 %lock_stack_top_offset_zext to ptr addrspace(2)
+  %lock_stack_top = load atomic i32, ptr addrspace(2) %lock_stack_top_addr unordered, align 4
+  %lock_stack_end = load i32, ptr @JavaThread.lock_stack_end
+  %is_lock_stack_full = icmp sge i32 %lock_stack_top, %lock_stack_end
   br i1 %is_lock_stack_full, label %return_false, label %lightweight_lock
 
 lightweight_lock:
@@ -496,13 +500,13 @@ lightweight_lock:
   br i1 %lightweight_lock_acquired, label %push_oop_to_lock_stack, label %return_false
 
 push_oop_to_lock_stack:
-  %new_lock_stack_top = load atomic i32, ptr %lock_stack_top_addr unordered, align 4
+  %new_lock_stack_top = load atomic i32, ptr addrspace(2) %lock_stack_top_addr unordered, align 4
   %new_lock_stack_top_zext = zext i32 %new_lock_stack_top to i64
-  %store_oop_addr = getelementptr inbounds i8, ptr %current_thread, i64 %new_lock_stack_top_zext
-  store atomic ptr addrspace(1) %obj, ptr %store_oop_addr unordered, align 8
+  %store_oop_addr = inttoptr i64 %new_lock_stack_top_zext to ptr addrspace(2)
+  store atomic ptr addrspace(1) %obj, ptr addrspace(2) %store_oop_addr unordered, align 8
   %oopSize = load i32, ptr @oopSize
   %lock_stack_top_increased = add i32 %new_lock_stack_top, %oopSize
-  store atomic i32 %lock_stack_top_increased, ptr %lock_stack_top_addr unordered, align 4
+  store atomic i32 %lock_stack_top_increased, ptr addrspace(2) %lock_stack_top_addr unordered, align 4
   br label %increment_lock_count_and_return_true
 
 monitor_lock_fast_path:
@@ -537,7 +541,8 @@ return_false:
 ; Fast path implementation of monitorexit when LockingMode == 1
 define hotspotcc i1 @jeandle.monitorexit_with_thin_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" {
 entry:
-  %lock_record_addr = getelementptr inbounds i8, ptr %lock, i32 0
+  %displaced_header_offset = load i32, ptr @BasicLock.displaced_header_offset_in_bytes
+  %lock_record_addr = getelementptr inbounds i8, ptr %lock, i32 %displaced_header_offset
   %lock_record = load atomic i64, ptr %lock_record_addr unordered, align 8
   %is_recursive_stack_unlock = icmp eq i64 %lock_record, 0
   br i1 %is_recursive_stack_unlock, label %decrement_lock_count_and_return_true, label %check_if_lock_is_inflated
@@ -585,12 +590,12 @@ lightweight_unlock_path:
   br i1 %lightweight_lock_released, label %pop_oop_from_lock_stack, label %return_false
 
 pop_oop_from_lock_stack:
-  %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %lock_stack_top_offset = load i32, ptr @JavaThread.lock_stack_top_offset
-  %lock_stack_top_addr = getelementptr inbounds i8, ptr %current_thread, i32 %lock_stack_top_offset
-  %lock_stack_top = load atomic i32, ptr %lock_stack_top_addr unordered, align 4
+  %lock_stack_top_offset_zext = zext i32 %lock_stack_top_offset to i64
+  %lock_stack_top_addr = inttoptr i64 %lock_stack_top_offset_zext to ptr addrspace(2)
+  %lock_stack_top = load atomic i32, ptr addrspace(2) %lock_stack_top_addr unordered, align 4
   %new_lock_stack_top = sub i32 %lock_stack_top, 8
-  store atomic i32 %new_lock_stack_top, ptr %lock_stack_top_addr unordered, align 4
+  store atomic i32 %new_lock_stack_top, ptr addrspace(2) %lock_stack_top_addr unordered, align 4
   call hotspotcc void @jeandle.clear_oop_in_lock_stack_top(i32 %new_lock_stack_top)
   br label %decrement_lock_count_and_return_true
 

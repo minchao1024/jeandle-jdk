@@ -245,8 +245,9 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("ObjArrayKlass.element_klass_offset",               int32_type, static_cast<uint64_t>(ObjArrayKlass::element_klass_offset()));
   define_global("oopDesc.klass_offset_in_bytes",                    int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
   define_global("oopDesc.mark_offset_in_bytes",                     int32_type, static_cast<uint64_t>(oopDesc::mark_offset_in_bytes()));
+  define_global("BasicLock.displaced_header_offset_in_bytes",       int32_type, static_cast<uint64_t>(BasicLock::displaced_header_offset_in_bytes()));
   define_global("JavaThread.held_monitor_count_offset",             int32_type, static_cast<uint64_t>(JavaThread::held_monitor_count_offset()));
-  define_global("JavaThread.lock_stack_top_cmp_value",              int32_type, static_cast<uint64_t>(LockStack::end_offset() - 1));
+  define_global("JavaThread.lock_stack_end",                        int32_type, static_cast<uint64_t>(LockStack::end_offset()));
   define_global("JavaThread.lock_stack_top_offset",                 int32_type, static_cast<uint64_t>(JavaThread::lock_stack_top_offset()));
   define_global("ObjectMonitor.EntryList_offset_no_monitor_value",  int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(EntryList)));
   define_global("ObjectMonitor.cxq_offset_no_monitor_value",        int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(cxq)));
