@@ -384,7 +384,7 @@ void JeandleCompiledCode::finalize() {
   build_implicit_exception_table();
 
   // TODO: generate code for deopt handler.
-  _offsets.set_value(CodeOffsets::Deopt, masm->offset());
+  _offsets.set_value(CodeOffsets::Deopt, assembler.emit_deopt_handler());
 }
 
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {

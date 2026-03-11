@@ -43,3 +43,14 @@ int JeandleAssembler::emit_consts(address consts_start, uint64_t consts_size, ui
   __ code()->consts()->set_end(__ code()->consts()->end() + consts_size);
   return padding;
 }
+
+int JeandleAssembler::emit_deopt_handler() {
+  int stub_size = X86_ONLY(ShowMessageBoxOnError ? 114 : 20) NOT_X86(12);
+  address base = __ start_a_stub(stub_size);
+  JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(base != nullptr, "deopt handler stub overflow", 0);
+  int offset = __ offset();
+  __ stop("deopt handler not implemented yet");
+  assert(__ offset() - offset <= stub_size, "overflow");
+  __ end_a_stub();
+  return offset;
+}
