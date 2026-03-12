@@ -45,7 +45,7 @@ int JeandleAssembler::emit_consts(address consts_start, uint64_t consts_size, ui
 }
 
 int JeandleAssembler::emit_deopt_handler() {
-  int stub_size = X86_ONLY(ShowMessageBoxOnError ? 114 : 20) NOT_X86(12);
+  int stub_size = X86_ONLY(ShowMessageBoxOnError ? 121 : 27) NOT_X86(12);
   address base = __ start_a_stub(stub_size);
   JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(base != nullptr, "deopt handler stub overflow", 0);
   int offset = __ offset();
