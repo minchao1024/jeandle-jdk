@@ -1316,14 +1316,14 @@ void JeandleAbstractInterpreter::invoke() {
 
   llvm::Value* receiver_value = nullptr;
 
-  // TODO: To keep consistent with C2, but no suitable test case for now.
-  // if (receiver) {
-    // int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
-    // receiver_value = _jvm->raw_peek(receiver_depth).value();
+  // If the receiver is null, do not torture the system by attempting to call through it.  
+  if (receiver) {
+    int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
+    receiver_value = _jvm->raw_peek(receiver_depth).value();
 
-    // assert(receiver_value != nullptr, "receiver must be present");
-    // null_check(receiver_value);
-  // }
+    assert(receiver_value != nullptr, "receiver must be present");
+    null_check(receiver_value);
+  }
 
   // try inline callee as intrinsic
   if (target->is_loaded()
@@ -1461,7 +1461,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   // Record this call.
   uint32_t id = _compiled_code.next_statepoint_id();
-  _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, _bytecodes.cur_bci(), true /* _has_deopt_operands */, id));
+  _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, _bytecodes.cur_bci(), id));
 
   // Every invoke instruction may throw exceptions, handle them here.
   DispatchedDest dispatched = dispatch_exception_for_invoke();
@@ -1887,10 +1887,10 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
 }
 
 // Call a Java operation, without exception handling.
-llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args) {
+llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle ) {
   llvm::Function* java_op_func = _module.getFunction(java_op);
   assert(java_op_func != nullptr, "invalid JavaOp");
-  llvm::CallInst* call_inst = create_call(java_op_func, args, llvm::CallingConv::Hotspot_JIT);
+  llvm::CallInst* call_inst = create_call(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle);
   return call_inst;
 }
 
@@ -2074,7 +2074,8 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
 }
 
 void JeandleAbstractInterpreter::add_safepoint_poll() {
-  call_java_op("jeandle.safepoint_poll", {});
+  llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
+  call_java_op("jeandle.safepoint_poll", {}, {deopt_bundle});
 }
 
 void JeandleAbstractInterpreter::arraylength() {
@@ -2624,7 +2625,7 @@ void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
-  call_monitorexit->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  call_monitorexit->setCallingConv(llvm::CallingConv::C);
   _ir_builder.CreateBr(monitor_exited);
 
   _ir_builder.SetInsertPoint(monitor_exited);

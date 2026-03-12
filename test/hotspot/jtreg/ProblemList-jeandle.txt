@@ -1,6 +1,5 @@
 compiler/arraycopy/TestArrayCopyNoInitDeopt.java                                               linux-aarch64,linux-x64
 compiler/blackhole/BlackholeIntrinsicTest.java                                                 linux-aarch64,linux-x64
-compiler/c1/CanonicalizeGetModifiers.java#id2                                                  linux-x64
 compiler/c2/Test6910605_1.java                                                                 linux-aarch64,linux-x64
 compiler/c2/Test6910605_2.java                                                                 linux-aarch64,linux-x64
 compiler/c2/TestBit.java                                                                       linux-aarch64,linux-x64
@@ -386,7 +385,6 @@ runtime/modules/AccessCheck/ExpQualToM1PrivateMethodIAE.java                    
 runtime/modules/ModulesSymLink.java                                                            linux-aarch64,linux-x64
 runtime/stringtable/StringTableCleaningTest.java                                               linux-aarch64
 serviceability/dcmd/gc/FinalizerInfoTest.java                                                  linux-aarch64,linux-x64
-serviceability/jvmti/Heap/IterateHeapWithEscapeAnalysisEnabled.java                            linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorEventOnOffTest.java                      linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCParallelTest.java                      linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCSerialTest.java                        linux-aarch64,linux-x64
