@@ -41,6 +41,7 @@
 @arrayOopDesc.base_offset_in_bytes.int = external global i32
 
 ; Byte offsets for Klass structure fields.
+@Klass.access_flags_offset = external global i32
 @Klass.secondary_super_cache_offset = external global i32
 @Klass.secondary_supers_offset = external global i32
 @Klass.super_check_offset_offset = external global i32
@@ -72,6 +73,7 @@
 @markWord.unused_mark_value = external global i64
 
 ; Global definitions
+@JVM_ACC_IS_VALUE_BASED_CLASS = external global i32
 @oopSize = external global i32
 @check_recursive_mask_value = external global i64
 
@@ -323,7 +325,20 @@ normal_lrem:
   ret i64 %result
 }
 
-; Check the lock if is inflated
+; Check if the object is value based
+define hotspotcc i1 @jeandle.check_if_value_based(ptr addrspace(1) nocapture %obj) "lower-phase"="0" {
+entry:
+  %obj_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %obj)
+  %access_flags_offset = load i32, ptr @Klass.access_flags_offset
+  %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %obj_klass, i32 %access_flags_offset
+  %access_flags = load i32, ptr addrspace(0) %access_flags_addr
+  %is_value_based_mask = load i32, ptr @JVM_ACC_IS_VALUE_BASED_CLASS
+  %masked_value = and i32 %access_flags, %is_value_based_mask
+  %is_value_based = icmp ne i32 %masked_value, 0
+  ret i1 %is_value_based
+}
+
+; Check if the lock is inflated
 define hotspotcc i1 @jeandle.check_inflated(i64 %mark_word) "lower-phase"="0" {
 entry:
   %markWord_monitor_value = load i64, ptr @markWord.monitor_value
