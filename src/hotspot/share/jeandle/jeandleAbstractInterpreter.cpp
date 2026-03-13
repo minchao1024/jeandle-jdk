@@ -2573,7 +2573,7 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
 
   if (DiagnoseSyncOnValueBasedClasses != 0) {
     llvm::BasicBlock* not_value_based = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_not_value_based", _llvm_func);
-    llvm::CallInst* check = call_java_op("jeandle.check_if_value_based", {obj});
+    llvm::CallInst* check = call_java_op("jeandle.check_if_value_based", {lock.object().value()});
     _ir_builder.CreateCondBr(check, monitorenter_slow_path, not_value_based);
 
     _ir_builder.SetInsertPoint(not_value_based);

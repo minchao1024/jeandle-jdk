@@ -256,11 +256,12 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("ObjectMonitor.owner_offset_no_monitor_value",      int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(owner)));
   define_global("ObjectMonitor.recursions_offset_no_monitor_value", int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(recursions)));
   define_global("ObjectMonitor.succ_offset_no_monitor_value",       int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(succ)));
-
+  
   define_global("markWord.clear_lock_mask",                         int64_type, static_cast<uint64_t>(~(int32_t)markWord::lock_mask_in_place));
   define_global("markWord.monitor_value",                           int64_type, static_cast<uint64_t>(markWord::monitor_value));
   define_global("markWord.unlocked_value",                          int64_type, static_cast<uint64_t>(markWord::unlocked_value));
   define_global("markWord.unused_mark_value",                       int64_type, static_cast<uint64_t>(markWord::unused_mark().value()));
+  define_global("ObjectMonitor.ANONYMOUS_OWNER",                    int64_type, static_cast<uint64_t>(ObjectMonitor::ANONYMOUS_OWNER));
   
   define_global("JVM_ACC_IS_VALUE_BASED_CLASS",                     int32_type, static_cast<uint64_t>(JVM_ACC_IS_VALUE_BASED_CLASS));
   define_global("oopSize",                                          int32_type, static_cast<uint64_t>(oopSize));

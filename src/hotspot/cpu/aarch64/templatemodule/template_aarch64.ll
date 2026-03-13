@@ -37,13 +37,13 @@ entry:
   %monitor_ptr = inttoptr i64 %mark_word to ptr
   %recursions_offset_no_monitor_value = load i32, ptr @ObjectMonitor.recursions_offset_no_monitor_value
   %recursions_addr = getelementptr inbounds i8, ptr %monitor_ptr, i32 %recursions_offset_no_monitor_value
-  %recursions = load atomic i64, ptr %recursions_addr unordered, align 8
+  %recursions = load i64, ptr %recursions_addr, align 8
   %is_recursive_monitor_unlock = icmp ne i64 %recursions, 0
   br i1 %is_recursive_monitor_unlock, label %decrease_recursions, label %check_for_waiters
 
 decrease_recursions:
   %new_recursions = sub i64 %recursions, 1
-  store atomic i64 %new_recursions, ptr %recursions_addr unordered, align 8
+  store i64 %new_recursions, ptr %recursions_addr, align 8
   br label %return_true
 
 check_for_waiters:
