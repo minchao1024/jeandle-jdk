@@ -61,7 +61,7 @@ check_for_waiters:
 clear_monitor_owner:
   %owner_offset_no_monitor_value = load i32, ptr @ObjectMonitor.owner_offset_no_monitor_value
   %owner_addr = getelementptr inbounds i8, ptr %monitor_ptr, i32 %owner_offset_no_monitor_value
-  store atomic volatile i64 0, ptr %owner_addr seq_cst, align 8
+  store atomic volatile i64 0, ptr %owner_addr release, align 8
   br label %return_true
 
 return_true:

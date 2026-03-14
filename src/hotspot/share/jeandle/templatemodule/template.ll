@@ -429,7 +429,7 @@ define hotspotcc i1 @jeandle.monitorenter_with_monitor_lock(ptr addrspace(1) noc
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
-  %mark_word = load atomic volatile i64, ptr addrspace(1) %mark_word_addr unordered, align 8
+  %mark_word = load atomic i64, ptr addrspace(1) %mark_word_addr unordered, align 8
   %is_inflated = call hotspotcc i1 @jeandle.check_inflated(i64 %mark_word)
   br i1 %is_inflated, label %monitor_lock_fast_path, label %return_false
 
@@ -450,7 +450,7 @@ define hotspotcc i1 @jeandle.monitorenter_with_thin_lock(ptr addrspace(1) nocapt
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
-  %mark_word = load atomic volatile i64, ptr addrspace(1) %mark_word_addr unordered, align 8
+  %mark_word = load atomic i64, ptr addrspace(1) %mark_word_addr unordered, align 8
   %is_inflated = call hotspotcc i1 @jeandle.check_inflated(i64 %mark_word)
   br i1 %is_inflated, label %monitor_lock_fast_path, label %thin_lock_path
 
@@ -481,9 +481,6 @@ increment_lock_count_and_return_true:
   call hotspotcc void @jeandle.increment_lock_count()
   ret i1 true
 
-return_true:
-  ret i1 true
-
 return_false:
   ret i1 false
 }
@@ -493,7 +490,7 @@ define hotspotcc i1 @jeandle.monitorenter_with_lightweight_lock(ptr addrspace(1)
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
-  %mark_word = load atomic volatile i64, ptr addrspace(1) %mark_word_addr unordered, align 8
+  %mark_word = load atomic i64, ptr addrspace(1) %mark_word_addr unordered, align 8
   %is_inflated = call hotspotcc i1 @jeandle.check_inflated(i64 %mark_word)
   br i1 %is_inflated, label %monitor_lock_fast_path, label %lightweight_lock_path
 
@@ -541,7 +538,7 @@ define hotspotcc i1 @jeandle.monitorexit_with_monitor_lock(ptr addrspace(1) noca
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
-  %mark_word = load atomic volatile i64, ptr addrspace(1) %mark_word_addr unordered, align 8
+  %mark_word = load atomic i64, ptr addrspace(1) %mark_word_addr unordered, align 8
   %released = call hotspotcc i1 @jeandle.try_release_monitor_lock(i64 %mark_word)
   br i1 %released, label %decrement_lock_count_and_return_true, label %return_false
 
@@ -565,7 +562,7 @@ entry:
 check_if_lock_is_inflated:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
-  %mark_word = load atomic volatile i64, ptr addrspace(1) %mark_word_addr unordered, align 8
+  %mark_word = load atomic i64, ptr addrspace(1) %mark_word_addr unordered, align 8
   %is_inflated = call hotspotcc i1 @jeandle.check_inflated(i64 %mark_word)
   br i1 %is_inflated, label %monitor_unlock_fast_path, label %thin_unlock_path
 
@@ -592,7 +589,7 @@ define hotspotcc i1 @jeandle.monitorexit_with_lightweight_lock(ptr addrspace(1) 
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
-  %mark_word = load atomic volatile i64, ptr addrspace(1) %mark_word_addr unordered, align 8
+  %mark_word = load atomic i64, ptr addrspace(1) %mark_word_addr unordered, align 8
   %is_inflated = call hotspotcc i1 @jeandle.check_inflated(i64 %mark_word)
   br i1 %is_inflated, label %check_anonymous_owner, label %lightweight_unlock_path
 

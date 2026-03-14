@@ -63,7 +63,7 @@ check_for_waiters:
 check_candidate_thread:
   %succ_offset_no_monitor_value = load i32, ptr @ObjectMonitor.succ_offset_no_monitor_value
   %succ_addr = getelementptr inbounds i8, ptr %monitor_ptr, i32 %succ_offset_no_monitor_value
-  %succ = load atomic i64, ptr %succ_addr unordered, align 8
+  %succ = load atomic volatile i64, ptr %succ_addr unordered, align 8
   %has_no_candidate_threads = icmp eq i64 %succ, 0
   br i1 %has_no_candidate_threads, label %return_false, label %try_release_monitor
 
@@ -72,9 +72,9 @@ clear_monitor_owner:
   br label %return_true
 
 try_release_monitor:
-  store atomic volatile i64 0, ptr %owner_addr release, align 8
+  store atomic volatile i64 0, ptr %owner_addr unordered, align 8
   fence seq_cst
-  %new_succ = load atomic i64, ptr %succ_addr unordered, align 8
+  %new_succ = load atomic volatile i64, ptr %succ_addr unordered, align 8
   %is_candidate_thread_null = icmp eq i64 %new_succ, 0
   br i1 %is_candidate_thread_null, label %reacquire_monitor, label %return_true
 
