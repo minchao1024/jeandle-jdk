@@ -36,6 +36,7 @@
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/ciSymbols.hpp"
 #include "classfile/javaClasses.hpp"
+#include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
@@ -254,8 +255,27 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     args.push_back(obj.value());
     args.push_back(lock);
   }
+  // update interpreter frame size for deopt
+  JeandleCompilation::current()->compiled_code()->update_interpreter_frame_size_in_bytes(interpreter_frame_size_in_bytes());
   return args;
 }
+
+int JeandleVMState::interpreter_frame_size_in_bytes() {
+  // they will be used if we can inline methods
+  int callee_locals = 0;
+  int callee_parameters = 0;
+  int frame_size = BytesPerWord * Interpreter::size_activation(max_stack(),
+                                                               stack_size() + callee_parameters,
+                                                               max_stack() - stack_size(),    // extra_size
+                                                               locks_size(),
+                                                               callee_parameters,
+                                                               callee_locals,
+                                                               true // is_top_frame
+                                                              );
+  callee_locals = (int)max_locals();
+  return frame_size + Deoptimization::last_frame_adjust(0, callee_locals) * BytesPerWord;
+}
+
 
 JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      int start_bci,
@@ -1065,8 +1085,7 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
 
   llvm::Value* request = _ir_builder.getInt32(Deoptimization::make_trap_request(reason, action));
   llvm::FunctionCallee callee = JeandleRuntimeRoutine::uncommon_trap_callee(_module);
-  llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
-  llvm::CallInst* call = create_call(callee, {request}, llvm::CallingConv::Hotspot_JIT, {deopt_bundle});
+  llvm::CallInst* call = create_call(callee, {request}, llvm::CallingConv::Hotspot_JIT, {create_current_deopt_bundle()});
   call->setDoesNotReturn();
 
   // mark unreachable
@@ -1468,8 +1487,8 @@ void JeandleAbstractInterpreter::invoke() {
   RETURN_VOID_ON_JEANDLE_ERROR();
 
   // Create the invoke instruction with deopt operands.
-  llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
-  llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args, {deopt_bundle});
+  llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args,
+                                                      {create_current_deopt_bundle()});
 
   // Continue to interpret the remaining bytecodes in the current JeandleBasicBlock at dispatched._normal_dest.
   _ir_builder.SetInsertPoint(dispatched._normal_dest);
@@ -1607,14 +1626,14 @@ llvm::CallInst* JeandleAbstractInterpreter::create_call(llvm::FunctionCallee cal
 }
 
 // Generate IR for calling into llvm FunctionCallee, with exception handling.
-llvm::InvokeInst* JeandleAbstractInterpreter::create_call_ex(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv) {
+llvm::InvokeInst* JeandleAbstractInterpreter::create_call_ex(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle) {
 
   // Handle exceptions for the routine.
   DispatchedDest dispatched = dispatch_exception_for_invoke();
   RETURN_ON_JEANDLE_ERROR(nullptr);
 
   // Create the invoke instruction.
-  llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args);
+  llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args, deopt_bundle);
 
   // Continue to interpret the remaining bytecodes in the current JeandleBasicBlock at dispatched._normal_dest.
   _ir_builder.SetInsertPoint(dispatched._normal_dest);
@@ -1880,10 +1899,10 @@ llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op
 }
 
 // Call a Java operation, with exception handling.
-llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args) {
+llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle) {
   llvm::Function* java_op_func = _module.getFunction(java_op);
   assert(java_op_func != nullptr, "invalid JavaOp");
-  llvm::InvokeInst* invoke_inst = create_call_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT);
+  llvm::InvokeInst* invoke_inst = create_call_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle);
   return invoke_inst;
 }
 
@@ -2059,8 +2078,7 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
 }
 
 void JeandleAbstractInterpreter::add_safepoint_poll() {
-  llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
-  call_java_op("jeandle.safepoint_poll", {}, {deopt_bundle});
+  call_java_op("jeandle.safepoint_poll", {}, {create_current_deopt_bundle()});
 }
 
 void JeandleAbstractInterpreter::arraylength() {
@@ -2283,7 +2301,7 @@ void JeandleAbstractInterpreter::do_new() {
   llvm::Value* klass_addr = _ir_builder.getInt64((int64_t)klass_enc);
   llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
 
-  _jvm->apush(call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}));
+  _jvm->apush(call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}, {create_current_deopt_bundle()}));
 }
 
 JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
@@ -2451,7 +2469,8 @@ void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)array_klass);
   llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
-  llvm::InvokeInst* result = call_java_op_ex("jeandle.newarray", {array_klass_ptr, length});
+  
+  llvm::InvokeInst* result = call_java_op_ex("jeandle.newarray", {array_klass_ptr, length}, {create_current_deopt_bundle()});
   _jvm->apush(result);
 }
 
@@ -2511,7 +2530,8 @@ void JeandleAbstractInterpreter::multianewarray() {
 
     llvm::Value* dimensions_array_length = _ir_builder.getInt32(ndimensions);
 
-    llvm::InvokeInst* dimensions_array_oop = call_java_op_ex("jeandle.newarray",{int_array_klass_ptr, dimensions_array_length});
+    llvm::InvokeInst* dimensions_array_oop = call_java_op_ex("jeandle.newarray", {int_array_klass_ptr, dimensions_array_length},
+                                                             {create_current_deopt_bundle()});
     RETURN_VOID_ON_JEANDLE_ERROR();
 
     llvm::Value* array_base_offset = _ir_builder.CreateLoad(llvm::Type::getInt32Ty(*_context),
@@ -2534,7 +2554,7 @@ void JeandleAbstractInterpreter::multianewarray() {
 
   args.push_back(call_java_op("jeandle.current_thread", {}));
 
-  _jvm->apush(create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT));
+  _jvm->apush(create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT, {create_current_deopt_bundle()}));
 }
 
 void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
