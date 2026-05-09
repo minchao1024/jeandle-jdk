@@ -684,7 +684,6 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _work_list(),
                                                        _sync_lock(LockValue()),
                                                        _oop_idx(0) {
-  // Fill basic blocks with LLVM IR.
   interpret();
 }
 

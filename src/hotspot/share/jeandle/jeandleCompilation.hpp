@@ -87,6 +87,12 @@ class JeandleCompilation : public StackObj {
     }
   }
 
+  ciMethod* inlinee() { return _inlinee; }
+  void set_inlinee(ciMethod* method) { _inlinee = method; }
+
+  void add_inline_candidate(const char* name, ciMethod* method) { _inline_candidates[name] = method; }
+  ciMethod* get_inline_candidate(const char* name) const { return _inline_candidates.lookup(name); }
+
   JeandleCompiledCode* compiled_code() { return &_code; }
 
   Arena* arena() { return _arena; }
@@ -116,6 +122,8 @@ class JeandleCompilation : public StackObj {
   bool _has_monitors;
 
   int _const_section_alignment;
+
+  ciMethod* _inlinee;
 
   const char* check_can_parse(ciMethod* method);
 
