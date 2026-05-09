@@ -123,7 +123,7 @@ bool JeandleCompiledCode::pd_resolve_reloc(JeandleAssembler& assembler,
         // TODO: Set the right bci.
         CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL, target_addr, -1/* bci */);
         if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
-          relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
+          relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, call_info));
         } else {
           // JeandleCallReloc for a non-gc-leaf routine call site will be created during stackmaps resolving because an oopmap is required.
           _routine_call_sites[inst_end_offset] = call_info;
@@ -138,7 +138,7 @@ bool JeandleCompiledCode::pd_resolve_reloc(JeandleAssembler& assembler,
         // TODO: Set the right bci.
         CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::EXTERNAL_CALL, target_addr, -1/* bci */);
         // LLVM doesn't rewrite intrinsic calls to statepoints, so we don't need oopmaps for external calls.
-        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
+        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, call_info));
       } else if (JeandleAssembler::is_section_word_reloc(edge, rel_high_edges)) {
         int64_t rel_offset = 0;
         auto actual_edge = edge;

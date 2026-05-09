@@ -22,6 +22,7 @@
 #define SHARE_JEANDLE_COMPILATION_HPP
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
@@ -73,6 +74,12 @@ class JeandleCompilation : public StackObj {
 
   void set_has_monitors(bool v) { _has_monitors = v; }
 
+  ciMethod* inlinee() { return _inlinee; }
+  void set_inlinee(ciMethod* method) { _inlinee = method; }
+
+  void add_inline_candidate(const char* name, ciMethod* method) { _inline_candidates[name] = method; }
+  ciMethod* get_inline_candidate(const char* name) const { return _inline_candidates.lookup(name); }
+
   JeandleCompiledCode* compiled_code() { return &_code; }
 
   Arena* arena() { return _arena; }
@@ -91,11 +98,15 @@ class JeandleCompilation : public StackObj {
   std::unique_ptr<llvm::Module> _llvm_module;
   std::string _comp_start_time;
 
+  llvm::StringMap<ciMethod*> _inline_candidates;
+
   JeandleCompiledCode _code; // Compiled code.
 
   const char* _error_msg;
 
   bool _has_monitors;
+
+  ciMethod* _inlinee;
 
   const char* check_can_parse(ciMethod* method);
 
@@ -109,6 +120,15 @@ class JeandleCompilation : public StackObj {
   void dump_ir(bool optimized);
 };
 
+class SetInlinee : public StackObj {
+public:
+  SetInlinee(ciMethod* method) {
+    JeandleCompilation::current()->set_inlinee(method);
+  }
+  ~SetInlinee() {
+    JeandleCompilation::current()->set_inlinee(nullptr);
+  }
+};
 
 #ifdef ASSERT
 #define JEANDLE_CRASH_ON_ERROR(_error_msg)                            \

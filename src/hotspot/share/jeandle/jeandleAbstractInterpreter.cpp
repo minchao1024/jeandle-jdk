@@ -204,9 +204,29 @@ void JeandleVMState::store(BasicType type, int index, llvm::Value* value) {
 
 
 llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& builder, int bci) {
+#ifdef ASSERT
+  if (log_is_enabled(Trace, jeandle)) {
+    tty->print_cr("Build deopt bundle at bci %d :", bci);
+  }
+#endif
+
   llvm::SmallVector<llvm::Value*> args;
-  // |--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
+  // Inliner:                |--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
+  // Inlinee: |--- method ---|--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
   /* TODO: scalar */
+
+  if (JeandleCompilation::current()->inlinee() != nullptr) {
+    uint64_t encode = DeoptValueEncoding(0, DeoptValueEncoding::MethodType, T_METADATA).encode();
+#ifdef ASSERT
+    if (log_is_enabled(Trace, jeandle)) {
+      DeoptValueEncoding::decode(encode).print();
+    }
+#endif
+    // TODO: maybe we can only use one slot.
+    args.push_back(builder.getInt64(encode));
+    args.push_back(builder.getInt64(uint64_t(JeandleCompilation::current()->inlinee())));
+  }
+
   args.push_back(builder.getInt32(bci));
   for (size_t i = 0; i < _locals.size(); i++) {
     if (!_locals[i].is_null()) {
@@ -236,6 +256,11 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
   for (size_t i = 0; i < _stack.size(); i++) {
     if (!_stack[i].is_null()) {
       uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::StackType, stack_computational_type_at(i)).encode();
+#ifdef ASSERT
+      if (log_is_enabled(Trace, jeandle)) {
+        DeoptValueEncoding::decode(encode).print();
+      }
+#endif
       args.push_back(builder.getInt64(encode));
       args.push_back(_stack[i].value());
       if (is_double_word_type(stack_computational_type_at(i))) {
@@ -244,6 +269,11 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     } else {
       // replace with {T_ILLEGAL, 0}
       uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::StackType, T_ILLEGAL).encode();
+#ifdef ASSERT
+      if (log_is_enabled(Trace, jeandle)) {
+        DeoptValueEncoding::decode(encode).print();
+      }
+#endif
       args.push_back(builder.getInt64(encode));
       args.push_back(builder.getInt32(0));
     }
@@ -254,12 +284,24 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     assert(obj.computational_type() == T_OBJECT, "should be object type");
     llvm::Value* lock = _locks[i].lock();
     uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::MonitorType, obj.computational_type()).encode();
+#ifdef ASSERT
+    if (log_is_enabled(Trace, jeandle)) {
+      DeoptValueEncoding::decode(encode).print();
+    }
+#endif
     args.push_back(builder.getInt64(encode));
     args.push_back(obj.value());
     args.push_back(lock);
   }
-  if (llvm::Value* orig_pc_slot = JeandleCompilation::current()->compiled_code()->orig_pc_slot()) {
+  if (JeandleCompilation::current()->inlinee() == nullptr) {
+    llvm::Value* orig_pc_slot = JeandleCompilation::current()->compiled_code()->orig_pc_slot();
+    assert(orig_pc_slot != nullptr, "sanity");
     uint64_t encode = DeoptValueEncoding(0, DeoptValueEncoding::OrigPcSlotType, T_ADDRESS).encode();
+#ifdef ASSERT
+    if (log_is_enabled(Trace, jeandle)) {
+      DeoptValueEncoding::decode(encode).print();
+    }
+#endif
     args.push_back(builder.getInt64(encode));
     args.push_back(orig_pc_slot);
   }
@@ -642,7 +684,6 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _work_list(),
                                                        _sync_lock(LockValue()),
                                                        _oop_idx(0) {
-  // Fill basic blocks with LLVM IR.
   interpret();
 }
 
@@ -1506,7 +1547,9 @@ void JeandleAbstractInterpreter::invoke() {
   // Declare callee function type.
   BasicType return_type = method_signature->return_type()->basic_type();
   llvm::FunctionType* func_type = llvm::FunctionType::get(JeandleType::java2llvm(return_type, *_context), args_type, false);
-  llvm::FunctionCallee callee = _module.getOrInsertFunction(JeandleFuncSig::method_name_with_signature(target), func_type);
+  std::string callee_name = JeandleFuncSig::method_name_with_signature(target);
+  JeandleCompilation::current()->add_inline_candidate(callee_name.c_str(), target);
+  llvm::FunctionCallee callee = _module.getOrInsertFunction(callee_name, func_type);
   llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   func->setGC(llvm::jeandle::JeandleGC);

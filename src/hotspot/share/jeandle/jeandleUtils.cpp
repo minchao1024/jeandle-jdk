@@ -81,6 +81,13 @@ bool is_effectively_final(Klass* klass) {
 }
 
 llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module) {
+  std::string func_name = method_name_with_signature(method);
+
+  llvm::Function* existing = target_module.getFunction(func_name);
+  if (existing != nullptr) {
+    return existing;
+  }
+
   llvm::SmallVector<llvm::Type*> args;
   llvm::LLVMContext& context = target_module.getContext();
 
@@ -100,7 +107,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
                               false);
   llvm::Function* func = llvm::Function::Create(func_type,
                                                 llvm::Function::ExternalLinkage,
-                                                method_name_with_signature(method),
+                                                func_name,
                                                 target_module);
 
   // Attach java-klass type attributes to parameters.

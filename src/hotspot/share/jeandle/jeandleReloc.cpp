@@ -30,26 +30,25 @@ void* JeandleReloc::operator new(size_t size) throw() {
   return JeandleCompilation::current()->arena()->Amalloc(size);
 }
 
-JeandleCallReloc::JeandleCallReloc(int inst_end_offset, ciEnv *env, ciMethod *method, JeandleStackMap *stack_map,
-                                   CallSiteInfo *call) :
+JeandleCallReloc::JeandleCallReloc(int inst_end_offset, ciEnv *env, ciMethod *method, CallSiteInfo *call) :
     JeandleReloc(
         inst_end_offset - JeandleCompiledCall::call_site_size(call->type()) /* beginning of a call instruction */),
-    _env(env), _method(method), _stack_map(stack_map), _call(call) {}
+    _env(env), _method(method), _call(call) {}
 
 void JeandleCallReloc::emit_reloc(JeandleAssembler &assembler) {
 #ifdef ASSERT
   // Each call reloc has an oopmap, except for EXTERNAL_CALL.
   if (_call->type() == JeandleCompiledCall::ROUTINE_CALL) {
     bool is_gc_leaf = JeandleRuntimeRoutine::is_gc_leaf(_call->target());
-    assert(is_gc_leaf == (_stack_map == nullptr), "unmatched call type and oopmap");
+    assert(is_gc_leaf == _stack_maps.empty(), "unmatched call type and oopmap");
   } else if (_call->type() == JeandleCompiledCall::EXTERNAL_CALL) {
-    assert(_stack_map == nullptr, "unmatched call type and oopmap");
+    assert(_stack_maps.empty(), "unmatched call type and oopmap");
   } else {
-    assert(_stack_map != nullptr, "unmatched call type and oopmap");
+    assert(!_stack_maps.empty(), "unmatched call type and oopmap");
   }
 #endif // ASSERT
 
-  if (_stack_map != nullptr) {
+  if (!_stack_maps.empty()) {
     process_stack_map();
   }
 
@@ -75,7 +74,7 @@ void JeandleCallReloc::emit_reloc(JeandleAssembler &assembler) {
       break;
 
     case JeandleCompiledCall::EXTERNAL_CALL:
-      assert(_stack_map == nullptr, "no oopmap in external call");
+      assert(_stack_maps.empty(), "no oopmap in external call");
       assembler.patch_external_call_site(offset(), _call);
       RETURN_VOID_ON_JEANDLE_ERROR();
       break;
@@ -90,30 +89,38 @@ int JeandleCallReloc::inst_end_offset() {
 }
 
 void JeandleCallReloc::process_stack_map() {
-  assert(_stack_map != nullptr, "oopmap must be initialized");
+  assert(!_stack_maps.empty(), "oopmap must be initialized");
   assert(inst_end_offset() >= 0, "pc offset must be initialized");
   assert(_fixed_up, "offset must be fixed up");
 
   DebugInformationRecorder *recorder = _env->debug_info();
-  recorder->add_safepoint(inst_end_offset(), _stack_map->oop_map());
+  recorder->add_safepoint(inst_end_offset(), _stack_maps.back()->oop_map());
 
-  DebugToken *locvals = recorder->create_scope_values(_stack_map->locals());
-  DebugToken *expvals = recorder->create_scope_values(_stack_map->stack());
-  DebugToken *monvals = recorder->create_monitor_values(_stack_map->monitors());
+  // Stub compilation does not need to emit scope values.
+  if (_method == nullptr) {
+    recorder->end_safepoint(inst_end_offset());
+    return;
+  }
 
-  recorder->describe_scope(inst_end_offset(),
-                           methodHandle(),
-                           _method,
-                           _call->bci(),
-                           _stack_map->reexecute(),
-                           false,
-                           _call->is_method_handle_invoke(),
-                           false,
-                           false,
-                           false,
-                           locvals,
-                           expvals,
-                           monvals);
+  for (JeandleStackMap* stack_map : _stack_maps) {
+    DebugToken *locvals = recorder->create_scope_values(stack_map->locals());
+    DebugToken *expvals = recorder->create_scope_values(stack_map->stack());
+    DebugToken *monvals = recorder->create_monitor_values(stack_map->monitors());
+
+    recorder->describe_scope(inst_end_offset(),
+                             methodHandle(),
+                             stack_map->method(),
+                             stack_map->bci(),
+                             stack_map->reexecute(),
+                             false,
+                             _call->is_method_handle_invoke(),
+                             false,
+                             false,
+                             false,
+                             locvals,
+                             expvals,
+                             monvals);
+  }
 
   recorder->end_safepoint(inst_end_offset());
 }

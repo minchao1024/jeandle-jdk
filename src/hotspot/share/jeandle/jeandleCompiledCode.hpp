@@ -56,12 +56,14 @@ public:
     MonitorType = 3,
     ScalarValueType = 4,
     OrigPcSlotType = 5,
-    LastType = OrigPcSlotType + 1
+    MethodType = 6,
+    LastType = MethodType + 1
   };
   DeoptValueEncoding(int index, DeoptValueType value_type, BasicType basic_type):
     _index(index), _value_type(value_type), _basic_type(basic_type) {
     assert(_value_type == LocalType || _value_type == StackType ||
-           _value_type == MonitorType || _value_type == OrigPcSlotType,
+           _value_type == MonitorType || _value_type == OrigPcSlotType ||
+           _value_type == MethodType,
            "Unsupported value type");
   }
 
@@ -91,12 +93,13 @@ public:
       case MonitorType: return "MonitorType";
       case ScalarValueType: return "ScalarValueType";
       case OrigPcSlotType: return "OrigPcSlotType";
+      case MethodType: return "MethodType";
       default: return "Unknown";
     }
   }
   void print() {
     ttyLocker ttyl;
-    tty->print_cr("DeoptValueEncoding: index: %d value_type: %s, basic_type: %s",
+    tty->print_cr("  DeoptValueEncoding: index: %d value_type: %s, basic_type: %s",
                   _index, value_type_name(_value_type), type2name(_basic_type));
   }
 #endif
@@ -146,12 +149,14 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   uint64_t _statepoint_id;
 };
 
-class JeandleStackMap {
+class JeandleStackMap : public JeandleCompilationResourceObj {
 public:
-  JeandleStackMap(OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute) :
-      _oop_map(oop_map), _locals(locals), _stack(stack), _monitors(monitors), _reexecute(reexecute) {
+  JeandleStackMap(int bci, ciMethod* method, OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute) :
+      _bci(bci), _method(method), _oop_map(oop_map), _locals(locals), _stack(stack), _monitors(monitors), _reexecute(reexecute) {
   }
-
+  
+  int bci() const { return _bci; }
+  ciMethod* method() const { return _method; }
   OopMap* oop_map() const { return _oop_map; }
   GrowableArray<ScopeValue*>* locals() const { return _locals; }
   GrowableArray<ScopeValue*>* stack() const { return _stack; }
@@ -159,6 +164,8 @@ public:
   bool reexecute() const { return _reexecute; }
 
 private:
+  int _bci;
+  ciMethod* _method;
   OopMap* _oop_map;
   GrowableArray<ScopeValue*>* _locals;
   GrowableArray<ScopeValue*>* _stack;
@@ -289,7 +296,13 @@ class JeandleCompiledCode : public StackObj {
   address lookup_const_section(llvm::StringRef name, JeandleAssembler& assembler);
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
 
-  JeandleStackMap* parse_stackmap(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info);
+  int parse_stackmap_prologue(StackMapParser::record_iterator& record,
+                              StackMapParser::RecordAccessor::location_iterator& location);
+  JeandleStackMap* parse_stackmap(StackMapParser& stackmaps,
+                                  StackMapParser::record_iterator& record,
+                                  StackMapParser::RecordAccessor::location_iterator& location,
+                                  CallSiteInfo* call_info,
+                                  int& num_deopts);
   LocationValue* new_location_value(const StackMapParser::LocationAccessor& location, Location::Type type);
   void fill_one_scope_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode,
                             const StackMapParser::LocationAccessor& location, GrowableArray<ScopeValue*>* array);

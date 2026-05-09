@@ -21,16 +21,20 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Jeandle/VMCallback.h"
 
+#include "jeandle/jeandleAbstractInterpreter.hpp"
+#include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleVMCallback.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmClasses.hpp"
+#include "compiler/compilerOracle.hpp"
 #include "oops/fieldInfo.inline.hpp"
 #include "oops/fieldStreams.inline.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/klass.inline.hpp"
 #include "runtime/handles.inline.hpp"
+#include "runtime/javaThread.hpp"
 
 namespace {
 
@@ -86,6 +90,41 @@ bool jeandle_is_effectively_final(uintptr_t klass_ptr) {
   return false;
 }
 
+bool jeandle_should_inline(const char* caller_name, const char* callee_name) {
+  JeandleCompilation* comp = JeandleCompilation::current();
+  if (comp == nullptr) {
+    return false;
+  }
+  ciMethod* callee = comp->get_inline_candidate(callee_name);
+  if (callee == nullptr) {
+    return false;
+  }
+  // TODO: inline getter and setter
+  return CompilerOracle::should_inline(methodHandle(Thread::current(), callee->get_Method()));
+}
+
+bool jeandle_resolve_callee(const char* callee_name, llvm::Module& M) {
+  llvm::Function* callee_func = M.getFunction(callee_name);
+  if (callee_func != nullptr && !callee_func->isDeclaration()) {
+    return true;
+  }
+  JeandleCompilation* comp = JeandleCompilation::current();
+  if (comp == nullptr) {
+    return false;
+  }
+  ciMethod* callee = comp->get_inline_candidate(callee_name);
+  if (callee == nullptr) {
+    return false;
+  }
+  {
+    SetInlinee inlinee_guard(callee);
+    JeandleAbstractInterpreter interpret(callee, -1, M, *comp->compiled_code());
+    assert(M.getFunction(callee_name) != nullptr, "callee function not found");
+    M.getFunction(callee_name)->setLinkage(llvm::GlobalValue::AvailableExternallyLinkage);
+  }
+  return !comp->error_occurred();
+}
+
 } // anonymous namespace
 
 void register_jeandle_vm_callbacks() {
@@ -96,5 +135,7 @@ void register_jeandle_vm_callbacks() {
   callbacks.IsInterface = &jeandle_is_interface;
   callbacks.IsObjectKlass = &jeandle_is_object_klass;
   callbacks.IsEffectivelyFinal = &jeandle_is_effectively_final;
+  callbacks.ShouldInline = &jeandle_should_inline;
+  callbacks.ResolveCallee = &jeandle_resolve_callee;
   llvm::jeandle::registerVMCallbacks(callbacks);
 }

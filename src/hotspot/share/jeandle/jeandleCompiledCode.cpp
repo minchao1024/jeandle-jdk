@@ -111,6 +111,17 @@ void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
 
   _elf = llvm::dyn_cast<ELFObject>(*elf_or_error);
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(_elf, "bad ELF file");
+
+  int func_count = 0;
+  for (const llvm::object::ELFSymbolRef &sym : _elf->symbols()) {
+    llvm::Expected<llvm::object::SymbolRef::Type> type = sym.getType();
+    if (!type || (*type) != llvm::object::SymbolRef::Type::ST_Function) {
+      continue;
+    }
+    func_count++;
+  }
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(func_count == 1,
+    "expected exactly one compiled function in ELF, but found multiple");
 }
 
 void JeandleCompiledCode::finalize() {
@@ -234,7 +245,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
           // TODO: Set the right bci.
           CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL, target_addr, -1/* bci */);
           if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
-            relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
+            relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, call_info));
           } else {
             // JeandleCallReloc for a non-gc-leaf routine call site will be created during stackmaps resolving because an oopmap is required.
             _routine_call_sites[inst_end_offset] = call_info;
@@ -249,7 +260,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
           // TODO: Set the right bci.
           CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::EXTERNAL_CALL, target_addr, -1/* bci */);
           // LLVM doesn't rewrite intrinsic calls to statepoints, so we don't need oopmaps for external calls.
-          relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
+          relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, call_info));
         } else if (JeandleAssembler::is_section_word_reloc(target, edge.getKind())) {
           // Const relocations.
           address target_addr;
@@ -307,7 +318,13 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         call_info = _routine_call_sites[inst_end_offset];
       }
       if (call_info) {
-        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, parse_stackmap(stackmaps, record, call_info), call_info));
+        auto location = record->location_begin();
+        int num_deopts = parse_stackmap_prologue(record, location);
+        JeandleCallReloc* reloc = new JeandleCallReloc(inst_end_offset, _env, _method, call_info);
+        do {
+          reloc->add_stack_map(parse_stackmap(stackmaps, record, location, call_info, num_deopts));
+        } while (location != record->location_end());
+        relocs.push_back(reloc);
       }
     }
   }
@@ -494,16 +511,17 @@ static bool bytecode_should_reexecute(Bytecodes::Code code) {
   }
 }
 
-JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info) {
+int JeandleCompiledCode::parse_stackmap_prologue(StackMapParser::record_iterator& record,
+                                                 StackMapParser::RecordAccessor::location_iterator& location) {
   assert(_frame_size > 0, "frame size must be greater than zero");
 
-  // It comes from observation of llvm stackmap, it may be changed in future.
   // The first 2 constants are ignored, the third constant is the number of deopt operands
-  auto location = record->location_begin();
 
+  // Ignore frame size
   auto first = *(location++);
   assert(location != record->location_end(), "must be in range");
 
+  // Ignore frame offset
   auto second = *(location++);
   assert(location != record->location_end(), "must be in range");
 
@@ -513,27 +531,49 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
   assert(second.getKind() == StackMapParser::LocationKind::Constant, "unexpected kind");
   assert(third.getKind() == StackMapParser::LocationKind::Constant, "unexpected kind");
 
-  int num_deopts = third.getSmallConstant();
+  return third.getSmallConstant();
+}
+
+JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
+                                                     StackMapParser::record_iterator& record,
+                                                     StackMapParser::RecordAccessor::location_iterator& location,
+                                                     CallSiteInfo* call_info,
+                                                     int& num_deopts) {
   bool reexecute = false;
+  int bci = -1;
+  ciMethod* current_method =nullptr;
+  if (JeandleCompilation::current()->inlinee() != nullptr) {
+    current_method = JeandleCompilation::current()->inlinee();
+  } else {
+    current_method = _method;
+  }
+
   if (num_deopts > 0) {
-    assert(this->_method != nullptr, "must be method compilation");
+    assert(current_method != nullptr, "must be method compilation");
 
     // bci goes first in deopt operands
-    int bci = (location++)->getSmallConstant();
+    bci = (location++)->getSmallConstant();
     num_deopts--;
     call_info->set_bci(bci);
 
     if (bci != InvocationEntryBci) {
-      Bytecodes::Code code = _method->java_code_at_bci(bci);
+      Bytecodes::Code code = current_method->java_code_at_bci(bci);
       reexecute = bytecode_should_reexecute(code); /* TODO: special case of multianewarray, please check GraphKit::should_reexecute_implied_by_bytecode */
     }
   }
 
+#ifdef ASSERT
+  if (num_deopts > 0 && log_is_enabled(Trace, jeandle)) {
+    tty->print("Parsing stackmap at bci %d, num_deopts = %d, reexecute = %d, inst_offset = 0x%X\n", bci, num_deopts, reexecute, record->getInstructionOffset());
+  }
+#endif
+
   // build scope values
-  GrowableArray<ScopeValue*>* locals = num_deopts > 0 ? new GrowableArray<ScopeValue*>(_method->max_locals()) : nullptr;
-  GrowableArray<ScopeValue*>* stack  = num_deopts > 0 ? new GrowableArray<ScopeValue*>(_method->max_stack()) : nullptr;
+  GrowableArray<ScopeValue*>* locals = num_deopts > 0 ? new GrowableArray<ScopeValue*>(current_method->max_locals()) : nullptr;
+  GrowableArray<ScopeValue*>* stack  = num_deopts > 0 ? new GrowableArray<ScopeValue*>(current_method->max_stack()) : nullptr;
   GrowableArray<MonitorValue*>* monitors = num_deopts > 0 ? new GrowableArray<MonitorValue*>() : nullptr;
-  while (num_deopts > 0) {
+  bool found_inlinee = false;
+  while (!found_inlinee && num_deopts > 0) {
     // local and stack deopt arguments are passed as a pair: <encode, value>
     // monitor deopt arguments are passed as a tuple: <encode, object, lock>
     assert(location != record->location_end(), "must be in range");
@@ -580,10 +620,26 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
         num_deopts -= 2;
         break;
       }
+      case DeoptValueEncoding::MethodType: {
+        // MethodType is the first value in the stack map of inlinee
+        // and it also serves as a marker to stop parsing the previous stack map.
+        assert(location != record->location_end(), "must be in range");
+        ciMethod* method = (ciMethod*)(StackMapUtil::getConstantUlong(stackmaps, *(location++)));
+        JeandleCompilation::current()->set_inlinee(method);
+        found_inlinee = true;
+        num_deopts -= 2;
+        break;
+      }
       default:
         Unimplemented();
     }
 
+  }
+
+  if (found_inlinee) {
+    return new JeandleStackMap(bci, current_method, nullptr, locals, stack, monitors, reexecute);
+  } else {
+    JeandleCompilation::current()->set_inlinee(nullptr);
   }
 
   // build oop map
@@ -616,7 +672,7 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
       oop_map->set_derived_oop(reg_derived, reg_base);
     }
   }
-  return new JeandleStackMap(oop_map, locals, stack, monitors, reexecute);
+  return new JeandleStackMap(bci, current_method, oop_map, locals, stack, monitors, reexecute);
 }
 
 void JeandleCompiledCode::build_exception_handler_table() {
