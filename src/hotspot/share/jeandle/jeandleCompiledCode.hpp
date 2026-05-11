@@ -154,7 +154,7 @@ public:
   JeandleStackMap(int bci, ciMethod* method, OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute) :
       _bci(bci), _method(method), _oop_map(oop_map), _locals(locals), _stack(stack), _monitors(monitors), _reexecute(reexecute) {
   }
-  
+
   int bci() const { return _bci; }
   ciMethod* method() const { return _method; }
   OopMap* oop_map() const { return _oop_map; }

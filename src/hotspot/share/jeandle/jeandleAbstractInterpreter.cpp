@@ -684,6 +684,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _work_list(),
                                                        _sync_lock(LockValue()),
                                                        _oop_idx(0) {
+  // Fill basic blocks with LLVM IR.
   interpret();
 }
 
@@ -2692,6 +2693,24 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 }
 
 void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
+  if (JeandleCompilation::current()->inlinee() != nullptr) {
+    llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(
+        _ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()),
+        llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+    _ir_builder.CreateStore(exception_oop, exception_oop_addr, true /* is_volatile */);
+
+    llvm::BasicBlock* unwind_block = llvm::BasicBlock::Create(*_context, "inlinee_unwind", _llvm_func);
+    _ir_builder.CreateBr(unwind_block);
+    _ir_builder.SetInsertPoint(unwind_block);
+
+    llvm::Type* landingpad_result_type = llvm::Type::getInt64Ty(*_context);
+    llvm::LandingPadInst* landingpad = _ir_builder.CreateLandingPad(landingpad_result_type, 0);
+    landingpad->setCleanup(true);
+
+    _ir_builder.CreateResume(landingpad);
+    return;
+  }
+
   // Call install_exceptional_return.
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_inst = create_call(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
