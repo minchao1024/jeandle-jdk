@@ -2580,7 +2580,7 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
                           exception_oop_addr,
                           true /* is_volatile */);
 
-  dispatch_exception_to_handler(exception_oop);
+  dispatch_exception_to_handler(exception_oop, landingpad);
   RETURN_ON_JEANDLE_ERROR(dispatched);
 
   // Recover insert point.
@@ -2595,7 +2595,7 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
   return dispatched;
 }
 
-void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exception_oop) {
+void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad) {
   llvm::Value* exception_klass = nullptr;
   llvm::Value* current_thread = nullptr;
   llvm::Value* current_method_ptr = nullptr;
@@ -2610,7 +2610,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
       if (_method && _method->is_synchronized()) {
         shared_unlock(_sync_lock);
       }
-      throw_exception(exception_oop);
+      throw_exception(exception_oop, landingpad);
       return;
     }
     int handler_bci = handler->handler_bci();
@@ -2691,22 +2691,26 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
   ShouldNotReachHere();
 }
 
-void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
+void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad) {
   if (JeandleCompilation::current()->inlinee() != nullptr) {
     llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(
         _ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()),
         llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
     _ir_builder.CreateStore(exception_oop, exception_oop_addr, true /* is_volatile */);
 
-    llvm::BasicBlock* unwind_block = llvm::BasicBlock::Create(*_context, "inlinee_unwind", _llvm_func);
-    _ir_builder.CreateBr(unwind_block);
-    _ir_builder.SetInsertPoint(unwind_block);
+    if (landingpad == nullptr) {
+      // For the unwind of athrow bytecode, resume passes a dummy value solely
+      // to signal that an exception occurred here. During inlining, this resume
+      // will be replaced with a branch to the caller's landing pad. Since all
+      // exception data is stored in and loaded from TLS (exception_oop), the
+      // dummy resume value is never consumed and causes no issues.
+      llvm::Type* landingpad_result_type = llvm::Type::getInt64Ty(*_context);
+      llvm::Value* dummy = llvm::ConstantInt::get(landingpad_result_type, 0);
+      _ir_builder.CreateResume(dummy);
+    } else {
+      _ir_builder.CreateResume(landingpad);
+    }
 
-    llvm::Type* landingpad_result_type = llvm::Type::getInt64Ty(*_context);
-    llvm::LandingPadInst* landingpad = _ir_builder.CreateLandingPad(landingpad_result_type, 0);
-    landingpad->setCleanup(true);
-
-    _ir_builder.CreateResume(landingpad);
     return;
   }
 

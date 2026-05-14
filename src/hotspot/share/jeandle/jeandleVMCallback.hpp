@@ -21,8 +21,19 @@
 #ifndef SHARE_JEANDLE_VM_CALLBACK_HPP
 #define SHARE_JEANDLE_VM_CALLBACK_HPP
 
+#include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/IR/Module.h"
+
+
 // Register VM callbacks (type hierarchy queries) with the LLVM-side
 // optimization pipeline. Called once during JeandleCompiler::initialize().
 void register_jeandle_vm_callbacks();
+
+// Check if the callee should be inlined based on CompilerOracle directives.
+// caller_name is optional (may be nullptr).
+bool jeandle_should_inline(const char* caller_name, const char* callee_name);
+
+// Resolve and compile the callee's IR into the given module if not already present.
+bool jeandle_resolve_callee(const char* callee_name, llvm::Module& M);
 
 #endif // SHARE_JEANDLE_VM_CALLBACK_HPP

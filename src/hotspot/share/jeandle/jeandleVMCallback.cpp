@@ -90,6 +90,8 @@ bool jeandle_is_effectively_final(uintptr_t klass_ptr) {
   return false;
 }
 
+} // anonymous namespace
+
 bool jeandle_should_inline(const char* caller_name, const char* callee_name) {
   JeandleCompilation* comp = JeandleCompilation::current();
   if (comp == nullptr) {
@@ -119,13 +121,13 @@ bool jeandle_resolve_callee(const char* callee_name, llvm::Module& M) {
   {
     SetInlinee inlinee_guard(callee);
     JeandleAbstractInterpreter interpret(callee, -1, M, *comp->compiled_code());
-    assert(M.getFunction(callee_name) != nullptr, "callee function not found");
-    M.getFunction(callee_name)->setLinkage(llvm::GlobalValue::AvailableExternallyLinkage);
+    llvm::Function* resolved_func = M.getFunction(callee_name);
+    assert(resolved_func != nullptr, "callee function not found");
+    JeandleFuncSig::setup_description(resolved_func);
+    resolved_func->setLinkage(llvm::GlobalValue::AvailableExternallyLinkage);
   }
   return !comp->error_occurred();
 }
-
-} // anonymous namespace
 
 void register_jeandle_vm_callbacks() {
   llvm::jeandle::VMCallbacks callbacks;
