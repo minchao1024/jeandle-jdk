@@ -72,12 +72,6 @@ class JeandleCompilation : public StackObj {
   static bool jeandle_error_occurred() { return JeandleCompilation::current()->error_occurred(); }
   static void print_timers();
 
-  ciMethod* inlinee() { return _inlinee; }
-  void set_inlinee(ciMethod* method) { _inlinee = method; }
-
-  void add_inline_candidate(const char* name, ciMethod* method) { _inline_candidates[name] = method; }
-  ciMethod* get_inline_candidate(const char* name) const { return _inline_candidates.lookup(name); }
-
   void set_has_monitors(bool v) { _has_monitors = v; }
 
   int const_section_alignment() { return _const_section_alignment; }
@@ -113,19 +107,17 @@ class JeandleCompilation : public StackObj {
   std::unique_ptr<llvm::Module> _llvm_module;
   std::string _comp_start_time;
 
+  ciMethod* _inlinee;
+
   llvm::StringMap<ciMethod*> _inline_candidates;
 
   JeandleCompiledCode _code; // Compiled code.
-
-  ciMethod* _inlinee;
 
   const char* _error_msg;
 
   bool _has_monitors;
 
   int _const_section_alignment;
-
-  ciMethod* _inlinee;
 
   const char* check_can_parse(ciMethod* method);
 
