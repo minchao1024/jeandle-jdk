@@ -92,12 +92,12 @@ bool jeandle_is_effectively_final(uintptr_t klass_ptr) {
 
 } // anonymous namespace
 
-bool jeandle_should_inline(const char* caller_name, const char* callee_name) {
+bool jeandle_should_inline(uintptr_t caller_name, uintptr_t callee_name) {
   JeandleCompilation* comp = JeandleCompilation::current();
   if (comp == nullptr) {
     return false;
   }
-  ciMethod* callee = comp->get_inline_candidate(callee_name);
+  ciMethod* callee = comp->get_inline_candidate((const char*)callee_name);
   if (callee == nullptr) {
     return false;
   }
@@ -105,23 +105,24 @@ bool jeandle_should_inline(const char* caller_name, const char* callee_name) {
   return CompilerOracle::should_inline(methodHandle(Thread::current(), callee->get_Method()));
 }
 
-bool jeandle_resolve_callee(const char* callee_name, llvm::Module& M) {
-  llvm::Function* callee_func = M.getFunction(callee_name);
-  if (callee_func != nullptr && !callee_func->isDeclaration()) {
-    return true;
-  }
+bool jeandle_resolve_callee(uintptr_t callee_name) {
   JeandleCompilation* comp = JeandleCompilation::current();
   if (comp == nullptr) {
     return false;
   }
-  ciMethod* callee = comp->get_inline_candidate(callee_name);
+  llvm::Module* M = comp->llvm_module();
+  llvm::Function* callee_func = M->getFunction((const char*)callee_name);
+  if (callee_func != nullptr && !callee_func->isDeclaration()) {
+    return true;
+  }
+  ciMethod* callee = comp->get_inline_candidate((const char*)callee_name);
   if (callee == nullptr) {
     return false;
   }
   {
     SetInlinee inlinee_guard(callee);
-    JeandleAbstractInterpreter interpret(callee, -1, M, *comp->compiled_code());
-    llvm::Function* resolved_func = M.getFunction(callee_name);
+    JeandleAbstractInterpreter interpret(callee, -1, *M, *comp->compiled_code());
+    llvm::Function* resolved_func = M->getFunction((const char*)callee_name);
     assert(resolved_func != nullptr, "callee function not found");
     JeandleFuncSig::setup_description(resolved_func);
     resolved_func->setLinkage(llvm::GlobalValue::AvailableExternallyLinkage);

@@ -314,14 +314,14 @@ void JeandleCompilation::compile_java_method() {
     }
     for (size_t i = 0; i < candidate_names.size(); i++) {
       const char* callee_name = candidate_names[i].c_str();
-      if (!jeandle_should_inline(nullptr, callee_name)) {
+      if (!jeandle_should_inline(0, (uintptr_t)callee_name)) {
         continue;
       }
       llvm::Function* func = _llvm_module->getFunction(callee_name);
       if (func != nullptr && !func->isDeclaration()) {
         continue;
       }
-      jeandle_resolve_callee(callee_name, *_llvm_module);
+      jeandle_resolve_callee((uintptr_t)callee_name);
       // New candidates may have been added by the callee's abstract interpretation.
       // Snapshot them before the next iteration to avoid iterator invalidation.
       for (auto it = _inline_candidates.begin(); it != _inline_candidates.end(); ++it) {

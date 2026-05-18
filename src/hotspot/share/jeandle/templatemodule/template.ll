@@ -886,4 +886,4 @@ return_false:
   ret i1 false
 }
 
-attributes #0 = { "gc-leaf-function" } 
+attributes #0 = { nounwind "gc-leaf-function" }

@@ -81,6 +81,8 @@ class JeandleCompilation : public StackObj {
     }
   }
 
+  llvm::Module* llvm_module() { return _llvm_module.get(); }
+
   ciMethod* inlinee() { return _inlinee; }
   void set_inlinee(ciMethod* method) { _inlinee = method; }
 
