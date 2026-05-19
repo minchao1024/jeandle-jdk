@@ -239,7 +239,6 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
       DeoptValueEncoding::decode(encode).print();
     }
 #endif
-    // TODO: maybe we can only use one slot.
     args.push_back(builder.getInt64(encode));
     args.push_back(builder.getInt64(uint64_t(JeandleCompilation::current()->inlinee())));
   }

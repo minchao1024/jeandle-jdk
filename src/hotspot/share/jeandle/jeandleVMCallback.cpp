@@ -102,7 +102,6 @@ bool jeandle_should_inline(uintptr_t caller_name, uintptr_t callee_name) {
   if (callee == nullptr) {
     return false;
   }
-  // TODO: inline getter and setter
   return CompilerOracle::should_inline(methodHandle(Thread::current(), callee->get_Method()));
 }
 

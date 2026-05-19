@@ -21,10 +21,6 @@
 #ifndef SHARE_JEANDLE_VM_CALLBACK_HPP
 #define SHARE_JEANDLE_VM_CALLBACK_HPP
 
-#include "jeandle/__llvmHeadersBegin__.hpp"
-#include "llvm/IR/Module.h"
-
-
 // Register VM callbacks (type hierarchy queries) with the LLVM-side
 // optimization pipeline. Called once during JeandleCompiler::initialize().
 void register_jeandle_vm_callbacks();
