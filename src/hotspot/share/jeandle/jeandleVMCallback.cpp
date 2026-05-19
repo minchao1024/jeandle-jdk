@@ -20,6 +20,7 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Jeandle/VMCallback.h"
+#include "llvm/IR/Jeandle/VMCallbackLog.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleCompilation.hpp"
@@ -141,4 +142,8 @@ void register_jeandle_vm_callbacks() {
   callbacks.ShouldInline = &jeandle_should_inline;
   callbacks.ResolveCallee = &jeandle_resolve_callee;
   llvm::jeandle::registerVMCallbacks(callbacks);
+
+  if (JeandleRecordVMCallbacks) {
+    llvm::jeandle::enableVMCallbackRecording();
+  }
 }
