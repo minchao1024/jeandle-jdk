@@ -3134,8 +3134,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     }
   }
   // Slow path: Bail to interpreter
-  // TODO: When inline is implemented, _method should be the root method (refer to C->method()).
-  ciMethod* m = Deoptimization::reason_is_speculate(reason) ? _method : nullptr;
+  ciMethod* m = Deoptimization::reason_is_speculate(reason) ? JeandleCompilation::current()->method() : nullptr;
   Deoptimization::DeoptAction action = Deoptimization::Action_maybe_recompile;
   // If we have triggered deoptimization too many times,
   // Immediately invalidate the code using Deoptimization::Action_none.
@@ -3578,7 +3577,7 @@ bool JeandleAbstractInterpreter::too_many_traps(ciMethod* method, int bci, Deopt
     // because of a transient condition during start-up in the interpreter.
     return false;
   }
-  ciMethod* m = Deoptimization::reason_is_speculate(reason) ? _method : nullptr;
+  ciMethod* m = Deoptimization::reason_is_speculate(reason) ? JeandleCompilation::current()->method() : nullptr;
   if (md->has_trap_at(bci, m, reason) != 0) {
     // Assume PerBytecodeTrapLimit==0, for a more conservative heuristic.
     // Also, if there are multiple reasons, or if there is no per-BCI record,

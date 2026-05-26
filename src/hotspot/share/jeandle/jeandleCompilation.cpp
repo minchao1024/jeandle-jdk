@@ -121,6 +121,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(method),
+                                       _inlinee(nullptr),
                                        _name(method->get_Method()->name_and_sig_as_C_string()),
                                        _entry_bci(entry_bci),
                                        _context(std::make_unique<llvm::LLVMContext>()),
@@ -170,6 +171,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(nullptr),
+                                       _inlinee(nullptr),
                                        _name(name),
                                        _entry_bci(-1),
                                        _context(std::move(context)),
@@ -321,42 +323,6 @@ void JeandleCompilation::compile_java_method() {
   {
     JeandleTraceTime tt_abstract_interpreter("Jeandle Abstract Interpret", abstract_interpreter_timer);
     JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code, _trap_hist);
-  }
-
-  {
-    // Workaround: eagerly resolve inline candidates before LLVM optimization.
-    // If callee resolution is deferred to LLVM's inliner via the ResolveCallee
-    // callback, JavaOperationLower may have already lowered/removed some java
-    // ops that the callee's IR depends on. This is a known bug with no proper
-    // fix yet. As a workaround, we pre-resolve all inline candidates here so
-    // that their IR is available in the module before any optimization pass runs.
-    //
-    // Snapshot the keys first because jeandle_resolve_callee may add new entries
-    // to _inline_candidates (transitive inlining), which invalidates iterators.
-    // Use index-based iteration so that newly appended keys are also visited.
-    llvm::SmallVector<std::string, 8> candidate_names;
-    for (auto it = _inline_candidates.begin(); it != _inline_candidates.end(); ++it) {
-      candidate_names.push_back(it->getKey().str());
-    }
-    for (size_t i = 0; i < candidate_names.size(); i++) {
-      const char* callee_name = candidate_names[i].c_str();
-      if (!jeandle_should_inline(0, (uintptr_t)callee_name)) {
-        continue;
-      }
-      llvm::Function* func = _llvm_module->getFunction(callee_name);
-      if (func != nullptr && !func->isDeclaration()) {
-        continue;
-      }
-      jeandle_resolve_callee((uintptr_t)callee_name);
-      // New candidates may have been added by the callee's abstract interpretation.
-      // Snapshot them before the next iteration to avoid iterator invalidation.
-      for (auto it = _inline_candidates.begin(); it != _inline_candidates.end(); ++it) {
-        std::string key = it->getKey().str();
-        if (std::find(candidate_names.begin(), candidate_names.end(), key) == candidate_names.end()) {
-          candidate_names.push_back(std::move(key));
-        }
-      }
-    }
   }
 
   if (JeandleDumpIR) {

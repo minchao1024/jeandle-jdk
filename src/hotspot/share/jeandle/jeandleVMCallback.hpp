@@ -25,11 +25,4 @@
 // optimization pipeline. Called once during JeandleCompiler::initialize().
 void register_jeandle_vm_callbacks();
 
-// Check if the callee should be inlined based on CompilerOracle directives.
-// caller_name is optional (may be nullptr).
-bool jeandle_should_inline(uintptr_t caller_name, uintptr_t callee_name);
-
-// Resolve and compile the callee's IR into current module if not already present.
-bool jeandle_resolve_callee(uintptr_t callee_name);
-
 #endif // SHARE_JEANDLE_VM_CALLBACK_HPP

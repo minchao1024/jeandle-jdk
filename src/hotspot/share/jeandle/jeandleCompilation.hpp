@@ -83,6 +83,8 @@ class JeandleCompilation : public StackObj {
 
   llvm::Module* llvm_module() { return _llvm_module.get(); }
 
+  ciMethod* method() { return _method; }
+
   ciMethod* inlinee() { return _inlinee; }
   void set_inlinee(ciMethod* method) { _inlinee = method; }
 
@@ -90,6 +92,8 @@ class JeandleCompilation : public StackObj {
   ciMethod* get_inline_candidate(const char* name) const { return _inline_candidates.lookup(name); }
 
   JeandleCompiledCode* compiled_code() { return &_code; }
+
+  uint* trap_hist() { return _trap_hist; }
 
   Arena* arena() { return _arena; }
 
@@ -103,14 +107,13 @@ class JeandleCompilation : public StackObj {
   llvm::DataLayout* _data_layout;
   ciEnv* _env;
   ciMethod* _method;
+  ciMethod* _inlinee;
   const std::string _name;
   int _entry_bci;
   std::unique_ptr<llvm::LLVMContext> _context;
   std::unique_ptr<llvm::Module> _llvm_module;
   std::string _comp_start_time;
   uint _trap_hist[MethodData::_trap_hist_limit];
-
-  ciMethod* _inlinee;
 
   llvm::StringMap<ciMethod*> _inline_candidates;
 
