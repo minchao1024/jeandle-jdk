@@ -239,7 +239,7 @@ declare hotspotcc ptr addrspace(1) @new_instance(ptr, ptr)
 
 ; Implementation of Java new object
 ; TODO: Support prefetch instructions for next allocations.
-define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes) noinline "lower-phase"="1" #0 {
+define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes) noinline "lower-phase"="1" {
 entry:
   %use_tlab = load i1, ptr @VMOptions.UseTLAB
   br i1 %use_tlab, label %test_tlab, label %alloc_slow_path
@@ -315,7 +315,7 @@ declare hotspotcc ptr @jeandle.current_thread()
 declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
 
 ; Implementation of Java anewarray and newarray operation
-define private hotspotcc ptr addrspace(1) @jeandle.newarray(ptr %array_klass, i32 %length) noinline "lower-phase"="1" #0 {
+define private hotspotcc ptr addrspace(1) @jeandle.newarray(ptr %array_klass, i32 %length) noinline "lower-phase"="1" {
 entry:
   %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %array_oop = call hotspotcc ptr addrspace(1) @new_array(ptr %array_klass, i32 %length, ptr %current_thread) [ "deopt"() ]
