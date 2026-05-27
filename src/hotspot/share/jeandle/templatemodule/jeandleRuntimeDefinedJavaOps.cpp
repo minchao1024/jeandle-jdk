@@ -43,6 +43,8 @@
 #include "runtime/objectMonitor.hpp"
 #include "runtime/safepointMechanism.hpp"
 
+// All JavaOps are nounwind and gc-leaf-function by default. If a JavaOp may trigger
+// GC safepoints or throw asynchronous exceptions, it must remove these attributes.
 //                  name, lower_phase, return_type, arg_types
 #define DEF_JAVA_OP(name, lower_phase, return_type, ...)                                        \
   void define_##name(llvm::Module& template_module) {                                           \
@@ -55,6 +57,8 @@
     func->setLinkage(llvm::Function::PrivateLinkage);                                           \
     func->addFnAttr("lower-phase", #lower_phase);                                               \
     func->addFnAttr(llvm::Attribute::NoInline);                                                 \
+    func->addFnAttr(llvm::Attribute::NoUnwind);                                                 \
+    func->addFnAttr("gc-leaf-function");                                                        \
     func->setCallingConv(llvm::CallingConv::Hotspot_JIT);                                       \
     llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(context, "entry", func);           \
     llvm::IRBuilder<> ir_builder(entry_block);
@@ -83,6 +87,10 @@ DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::Ad
 JAVA_OP_END
 
 DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
+  // safepoint_poll may trigger GC and throw asynchronous exceptions,
+  // so it must not be nounwind or gc-leaf-function.
+  func->removeFnAttr(llvm::Attribute::NoUnwind);
+  func->removeFnAttr("gc-leaf-function");
   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
 
