@@ -100,6 +100,10 @@ bool jeandle_should_inline(uintptr_t caller_name, uintptr_t callee_name) {
   if (callee == nullptr) {
     return false;
   }
+  if (!callee->can_be_statically_bound()) {
+    // Virtual inlining not implemented yet.
+    return false;
+  }
   return CompilerOracle::should_inline(methodHandle(Thread::current(), callee->get_Method()));
 }
 
