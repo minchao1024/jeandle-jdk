@@ -569,7 +569,8 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 
     // bci goes first in deopt operands
     bci = (location++)->getSmallConstant();
-    num_deopts--;
+    guarantee(bci == (int)((location++)->getSmallConstant()), "duplicated bci must match");
+    num_deopts -= 2;
     call_info->set_bci(bci);
 
     if (bci != InvocationEntryBci) {

@@ -229,8 +229,11 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
 #endif
 
   llvm::SmallVector<llvm::Value*> args;
-  // Inliner:                |--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
-  // Inlinee: |--- method ---|--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
+  // Inliner:                |--- bci ---|--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
+  // Inlinee: |--- method ---|--- bci ---|--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
+  // The backend scans deopt args in postorder and treats adjacent int32 values
+  // as the BCI marker, so the BCI is stored twice without requiring the backend
+  // to understand Jeandle's full marker layout.
   /* TODO: scalar */
 
   if (JeandleCompilation::current()->inlinee() != nullptr) {
@@ -244,6 +247,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     args.push_back(builder.getInt64(uint64_t(JeandleCompilation::current()->inlinee())));
   }
 
+  args.push_back(builder.getInt32(bci));
   args.push_back(builder.getInt32(bci));
   for (size_t i = 0; i < _locals.size(); i++) {
     if (!_locals[i].is_null()) {
@@ -267,7 +271,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
       }
 #endif
       args.push_back(builder.getInt64(encode));
-      args.push_back(builder.getInt32(0));
+      args.push_back(builder.getInt64(0));
     }
   }
   for (size_t i = 0; i < _stack.size(); i++) {
@@ -292,7 +296,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
       }
 #endif
       args.push_back(builder.getInt64(encode));
-      args.push_back(builder.getInt32(0));
+      args.push_back(builder.getInt64(0));
     }
   }
   for (size_t i = 0; i < _locks.size(); i++) {
@@ -714,13 +718,11 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _compiled_code(code),
                                                        _block_builder(new BasicBlockBuilder(method, entry_bci, _context, _llvm_func)),
                                                        _ir_builder(_block_builder->entry_block()->header_llvm_block()),
-                                                       _oops(),
                                                        _block(nullptr),
                                                        _jvm(nullptr),
                                                        _work_list(),
                                                        _sync_lock(LockValue()),
-                                                       _trap_hist(trap_hist),
-                                                       _oop_idx(0) {
+                                                       _trap_hist(trap_hist) {
   // Fill basic blocks with LLVM IR.
   interpret();
 }
@@ -993,7 +995,7 @@ void JeandleAbstractInterpreter::interpret() {
       // Setup Object Pointer
       llvm::Value* lock_obj = nullptr;
       if (_method->is_static()) {
-        llvm::Value* oop_handle = find_or_insert_oop(_method->holder()->java_mirror());
+        llvm::Value* oop_handle = JeandleCompilation::current()->find_or_insert_oop(_method->holder()->java_mirror());
         lock_obj = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
       } else {
         // Lock the "this" pointer, which is the first parameter
@@ -1503,7 +1505,7 @@ void JeandleAbstractInterpreter::load_constant() {
       if (con_obj->is_null_object()) {
         value = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
       } else {
-        llvm::Value* oop_handle = find_or_insert_oop(con_obj);
+        llvm::Value* oop_handle = JeandleCompilation::current()->find_or_insert_oop(con_obj);
         value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
       }
 
@@ -1756,9 +1758,6 @@ void JeandleAbstractInterpreter::invoke() {
 
   bool is_method_handle_invoke = (target->is_method_handle_intrinsic() ||
                                   target->is_compiled_lambda_form());
-  if (is_method_handle_invoke) {
-    _compiled_code.set_has_method_handle_invoke(true);
-  }
 
   // try inline callee as intrinsic
   if (target->is_loaded()
@@ -1776,7 +1775,7 @@ void JeandleAbstractInterpreter::invoke() {
   // Push appendix argument (MethodType, CallSite, etc.), if one.
   if (_bytecodes.has_appendix()) {
     assert(Bytecodes::has_optional_appendix(bc), "appendix only valid for invokedynamic or invokehandle");
-    llvm::Value* appendix_oop_handle = find_or_insert_oop(_bytecodes.get_appendix());
+    llvm::Value* appendix_oop_handle = JeandleCompilation::current()->find_or_insert_oop(_bytecodes.get_appendix());
     llvm::Value* appendix_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), appendix_oop_handle);
     _jvm->push(T_OBJECT, appendix_oop);
   }
@@ -1848,9 +1847,10 @@ void JeandleAbstractInterpreter::invoke() {
   BasicType return_type = method_signature->return_type()->basic_type();
   llvm::FunctionType* func_type = llvm::FunctionType::get(JeandleType::java2llvm(return_type, *_context), args_type, false);
   std::string callee_name = JeandleFuncSig::method_name_with_signature(target);
-  JeandleCompilation::current()->add_inline_candidate(callee_name.c_str(), target);
+  JeandleCompilation::current()->add_method_for_llvm_name(callee_name.c_str(), target);
   llvm::FunctionCallee callee = _module.getOrInsertFunction(callee_name, func_type);
   llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
+  func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::JavaMethod));
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   func->setGC(llvm::jeandle::JeandleGC);
 
@@ -1924,6 +1924,10 @@ void JeandleAbstractInterpreter::invoke() {
                                                  std::to_string(JeandleCompiledCall::call_site_patch_size(call_type)));
   invoke->addFnAttr(id_attr);
   invoke->addFnAttr(patch_bytes_attr);
+  if (target->can_be_statically_bound()) {
+    invoke->addFnAttr(llvm::Attribute::get(*_context,
+                                            llvm::jeandle::Attribute::MonomorphicTarget));
+  }
 
   // Attach java-klass return type attribute to the call site.
   ciType* ret_type = method_signature->return_type();
@@ -2358,22 +2362,6 @@ llvm::OperandBundleDef JeandleAbstractInterpreter::create_current_deopt_bundle()
   return llvm::OperandBundleDef("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
 }
 
-llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
-  jobject oop_handle = oop->constant_encoding();
-  if (llvm::Value* global_oop_handle = _oops.lookup(oop_handle)) {
-    return global_oop_handle;
-  }
-  std::string oop_name = next_oop_name(oop->klass()->external_name());
-  _compiled_code.oop_handles()[oop_name] = oop_handle;
-  llvm::Value* global = _module.getOrInsertGlobal(
-                               oop_name,
-                               JeandleType::java2llvm(BasicType::T_OBJECT, *_context));
-  llvm::GlobalVariable* global_oop_handle = llvm::cast<llvm::GlobalVariable>(global);
-  global_oop_handle->setDSOLocal(true);
-  _oops[oop_handle] = global_oop_handle;
-  return global_oop_handle;
-}
-
 // TODO: Handle field attributions like final, stable.
 void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
   bool will_link;
@@ -2485,7 +2473,7 @@ llvm::Value* JeandleAbstractInterpreter::compute_instance_field_address(llvm::Va
 
 llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstanceKlass* holder, int offset) {
   ciInstance* holder_instance = holder->java_mirror();
-  llvm::Value* holder_oop_handle = find_or_insert_oop(holder_instance);
+  llvm::Value* holder_oop_handle = JeandleCompilation::current()->find_or_insert_oop(holder_instance);
   llvm::Value* holder_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), holder_oop_handle);
   return _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
                                        holder_oop,
@@ -3114,7 +3102,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
         uncommon_trap_if_should_post_on_exceptions(reason);
       }
 
-      llvm::Value* oop_handle = find_or_insert_oop(ex_obj);
+      llvm::Value* oop_handle = JeandleCompilation::current()->find_or_insert_oop(ex_obj);
       llvm::Value* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
 
       int offset = java_lang_Throwable::get_detailMessage_offset();

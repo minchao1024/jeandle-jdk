@@ -23,6 +23,7 @@
  */
 
 #include "jeandle/jeandleAssembler.hpp"
+#include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleReloc.hpp"
 
@@ -100,6 +101,13 @@ void JeandleCallReloc::process_stack_map() {
   if (_method == nullptr) {
     recorder->end_safepoint(inst_end_offset());
     return;
+  }
+
+  if (_call->is_method_handle_invoke()) {
+    // nmethod requires a DeoptMH handler exactly when at least one emitted
+    // PcDesc is marked as a method-handle invoke. Set the flag here, where the
+    // final post-LLVM-inlining debug info is actually recorded.
+    JeandleCompilation::current()->compiled_code()->set_has_method_handle_invoke(true);
   }
 
   for (JeandleStackMap* stack_map : _stack_maps) {

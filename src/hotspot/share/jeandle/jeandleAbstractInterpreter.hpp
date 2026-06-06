@@ -23,7 +23,6 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
@@ -280,9 +279,6 @@ class JeandleAbstractInterpreter : public StackObj {
   BasicBlockBuilder* _block_builder;
   llvm::IRBuilder<> _ir_builder;
 
-  // Record oop values.
-  llvm::DenseMap<jobject, llvm::Value*> _oops;
-
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
   JeandleVMState* _jvm;
@@ -370,14 +366,6 @@ class JeandleAbstractInterpreter : public StackObj {
   void add_safepoint_poll();
 
   llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
-
-  llvm::Value* find_or_insert_oop(ciObject* oop);
-
-  int _oop_idx;
-  std::string next_oop_name(const char* klass_name) {
-      assert(klass_name != nullptr, "klass_name can not be null");
-      return std::string("oop_handle_") + std::string(klass_name) + "_" + std::to_string(_oop_idx++);
-  }
 
   // Implementation of _get* and _put* bytecodes.
   void do_getstatic() { do_field_access(true, true); }

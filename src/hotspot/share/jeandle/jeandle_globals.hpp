@@ -59,6 +59,10 @@
   product(bool, JeandleRecordVMCallbacks, false,                            \
           "Record VM callback invocations for standalone LLVM testing")     \
                                                                             \
+  product(intx, JeandleNodeCountInliningCutoff, 18000,                      \
+          "If root LLVM IR instruction count exceeds limit stop inlining")   \
+          range(0, max_jint)                                                \
+                                                                            \
 
 // end of JEANDLE_FLAGS
 
