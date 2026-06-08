@@ -29,6 +29,7 @@
 #include "llvm/IR/LLVMContext.h"
 
 #include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleParseContext.hpp"
 #include "jeandle/jeandleType.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
@@ -126,7 +127,9 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   size_t locks_size() const { return _locks.size(); }
   LockValue lock_at(int index) { return _locks[index]; }
 
-  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder, int bci);
+  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder,
+                                             const JeandleParseContext& parse_context,
+                                             int bci);
 
   int interpreter_frame_size_in_bytes();
  private:
@@ -262,13 +265,14 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
 // Convert java bytecodes to llvm ir.
 class JeandleAbstractInterpreter : public StackObj {
  public:
-  JeandleAbstractInterpreter(ciMethod* method,
+  JeandleAbstractInterpreter(const JeandleParseContext& parse_context,
                              int entry_bci,
                              llvm::Module& target_module,
                              JeandleCompiledCode& code,
                              uint* trap_hist);
 
  private:
+  JeandleParseContext _parse_context;
   ciMethod* _method;
   llvm::Function* _llvm_func;
   int _entry_bci;
@@ -364,6 +368,7 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::OperandBundleDef create_current_deopt_bundle();
 
   void add_safepoint_poll();
+  void add_return_safepoint_poll();
 
   llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
 

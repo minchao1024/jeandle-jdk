@@ -94,6 +94,24 @@ static elapsedTimer jeandle_timers[max_phase_timers];
 // Counts how many methods have been compiled by Jeandle (optional)
 static int jeandle_compilation_count = 0;
 
+static llvm::jeandle::PipelineOptions jeandle_java_pipeline_options() {
+  llvm::jeandle::PipelineOptions options;
+  if (Inline) {
+    options.Inlining = llvm::jeandle::InlineMode::Default;
+  } else if (InlineAccessors) {
+    options.Inlining = llvm::jeandle::InlineMode::AccessorOnly;
+  } else {
+    options.Inlining = llvm::jeandle::InlineMode::Disabled;
+  }
+  return options;
+}
+
+static llvm::jeandle::PipelineOptions jeandle_runtime_stub_pipeline_options() {
+  llvm::jeandle::PipelineOptions options;
+  options.Inlining = llvm::jeandle::InlineMode::Disabled;
+  return options;
+}
+
 // Returns the const section alignment for the current Jeandle compilation.
 // Only returns a valid value when running inside a Jeandle compilation thread;
 // returns -1 otherwise (e.g., non-compiler threads, or C1/C2 compiler threads
@@ -135,7 +153,6 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(method),
-                                       _inlinee(nullptr),
                                        _name(method->get_Method()->name_and_sig_as_C_string()),
                                        _entry_bci(entry_bci),
                                        _context(std::make_unique<llvm::LLVMContext>()),
@@ -189,7 +206,6 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(nullptr),
-                                       _inlinee(nullptr),
                                        _name(name),
                                        _entry_bci(-1),
                                        _context(std::move(context)),
@@ -218,7 +234,8 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   }
 
   // Optimize.
-  llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3);
+  llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3,
+                          jeandle_runtime_stub_pipeline_options());
 
   // Verify module in debug builds after optimization.
   DEBUG_ONLY({
@@ -677,6 +694,12 @@ bool JeandleInlineTree::try_to_inline(JeandleCompilation* comp,
     }
   }
 
+  // If global inlining is disabled, only the InlineAccessors fast path above
+  // may pass. LLVM normally enforces the same mode before invoking this policy.
+  if (!Inline) {
+    return false;
+  }
+
   if (inline_depth() > MaxForceInlineLevel) {
     return false;
   }
@@ -715,9 +738,9 @@ bool JeandleInlineTree::ok_to_inline(JeandleCompilation* comp,
   ciMethod* caller = method();
   assert(caller != nullptr, "caller method must exist");
 
-  // Jeandle gets here only after LLVM has identified a STATIC_CALL call site
-  // by statepoint id. CHA/PGO monomorphization therefore happens before this
-  // policy; this method mirrors C2's post-target-selection inline checks.
+  // Jeandle gets here only after LLVM has selected a monomorphic Java call
+  // site. CHA/PGO monomorphization is represented in IR before this policy;
+  // this method mirrors C2's post-target-selection inline checks.
   if (!pass_initial_checks(comp, caller, caller_bci, callee)) {
     return false;
   }
@@ -926,7 +949,8 @@ void JeandleCompilation::compile_java_method() {
   // Build basic blocks. Then fill basic blocks with LLVM IR.
   {
     JeandleTraceTime tt_abstract_interpreter("Jeandle Abstract Interpret", abstract_interpreter_timer);
-    JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code, _trap_hist);
+    JeandleParseContext parse_context = JeandleParseContext::root(_method);
+    JeandleAbstractInterpreter interpret(parse_context, _entry_bci, *_llvm_module, _code, _trap_hist);
   }
 
   if (JeandleDumpIR) {
@@ -951,7 +975,8 @@ void JeandleCompilation::compile_java_method() {
   // Optimize.
   {
     JeandleTraceTime tt_optimize("Jeandle LLVM Optimize", llvm_optimizer_timer);
-    llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3);
+    llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3,
+                            jeandle_java_pipeline_options());
   }
 
   // Verify module in debug builds after optimization.

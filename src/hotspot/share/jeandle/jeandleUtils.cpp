@@ -172,7 +172,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
     }
   }
 
-  setup_description(func);
+  setup_description(func, method->is_accessor());
 
   return func;
 }

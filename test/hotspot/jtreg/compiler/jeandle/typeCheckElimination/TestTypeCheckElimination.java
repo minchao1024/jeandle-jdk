@@ -23,6 +23,7 @@
  * @summary Test TypeCheckElimination pass eliminates redundant type checks
  * @library /test/lib /
  * @run driver TestTypeCheckElimination
+ * @run driver -XX:-Inline TestTypeCheckElimination
  */
 
 import java.util.ArrayList;

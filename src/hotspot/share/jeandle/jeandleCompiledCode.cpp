@@ -337,8 +337,21 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         auto location = record->location_begin();
         int num_deopts = parse_stackmap_prologue(record, location);
         JeandleCallReloc* reloc = new JeandleCallReloc(inst_end_offset, _env, _method, call_info);
+        JeandleParseContext parse_context = _method != nullptr ? JeandleParseContext::root(_method)
+                                                               : JeandleParseContext();
+        // A stackmap record may contain several Java scopes after LLVM inlines
+        // callee IR into the root method. Jeandle emits each inlinee scope with a
+        // leading MethodType marker. parse_stackmap consumes one scope at a time:
+        // it stops at that marker, returns the caller scope, and passes the marked
+        // method back as next_inlinee so the next iteration can parse the inlinee
+        // frame with the right ciMethod for BCI and scope-value decoding.
         do {
-          reloc->add_stack_map(parse_stackmap(stackmaps, record, location, call_info, num_deopts));
+          ciMethod* next_inlinee = nullptr;
+          reloc->add_stack_map(parse_stackmap(stackmaps, record, location, call_info, num_deopts,
+                                              parse_context, next_inlinee));
+          if (next_inlinee != nullptr) {
+            parse_context = JeandleParseContext::inlinee(next_inlinee);
+          }
         } while (location != record->location_end());
         relocs.push_back(reloc);
       }
@@ -554,15 +567,13 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
                                                      StackMapParser::record_iterator& record,
                                                      StackMapParser::RecordAccessor::location_iterator& location,
                                                      CallSiteInfo* call_info,
-                                                     int& num_deopts) {
+                                                     int& num_deopts,
+                                                     const JeandleParseContext& parse_context,
+                                                     ciMethod*& next_inlinee) {
   bool reexecute = false;
   int bci = -1;
-  ciMethod* current_method =nullptr;
-  if (JeandleCompilation::current()->inlinee() != nullptr) {
-    current_method = JeandleCompilation::current()->inlinee();
-  } else {
-    current_method = _method;
-  }
+  ciMethod* current_method = parse_context.method();
+  next_inlinee = nullptr;
 
   if (num_deopts > 0) {
     assert(current_method != nullptr, "must be method compilation");
@@ -589,8 +600,8 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
   GrowableArray<ScopeValue*>* locals = num_deopts > 0 ? new GrowableArray<ScopeValue*>(current_method->max_locals()) : nullptr;
   GrowableArray<ScopeValue*>* stack  = num_deopts > 0 ? new GrowableArray<ScopeValue*>(current_method->max_stack()) : nullptr;
   GrowableArray<MonitorValue*>* monitors = num_deopts > 0 ? new GrowableArray<MonitorValue*>() : nullptr;
-  bool found_inlinee = false;
-  while (!found_inlinee && num_deopts > 0) {
+  bool found_inlinee_marker = false;
+  while (!found_inlinee_marker && num_deopts > 0) {
     // local and stack deopt arguments are passed as a pair: <encode, value>
     // monitor deopt arguments are passed as a tuple: <encode, object, lock>
     assert(location != record->location_end(), "must be in range");
@@ -642,8 +653,8 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
         // and it also serves as a marker to stop parsing the previous stack map.
         assert(location != record->location_end(), "must be in range");
         ciMethod* method = (ciMethod*)(StackMapUtil::getConstantUlong(stackmaps, *(location++)));
-        JeandleCompilation::current()->set_inlinee(method);
-        found_inlinee = true;
+        next_inlinee = method;
+        found_inlinee_marker = true;
         num_deopts -= 2;
         break;
       }
@@ -653,10 +664,8 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 
   }
 
-  if (found_inlinee) {
+  if (found_inlinee_marker) {
     return new JeandleStackMap(bci, current_method, nullptr, locals, stack, monitors, reexecute);
-  } else {
-    JeandleCompilation::current()->set_inlinee(nullptr);
   }
 
   // build oop map

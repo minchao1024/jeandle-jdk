@@ -221,7 +221,9 @@ void JeandleVMState::store(BasicType type, int index, llvm::Value* value) {
 }
 
 
-llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& builder, int bci) {
+llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& builder,
+                                                           const JeandleParseContext& parse_context,
+                                                           int bci) {
 #ifdef ASSERT
   if (log_is_enabled(Trace, jeandle)) {
     tty->print_cr("Build deopt bundle at bci %d :", bci);
@@ -236,7 +238,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
   // to understand Jeandle's full marker layout.
   /* TODO: scalar */
 
-  if (JeandleCompilation::current()->inlinee() != nullptr) {
+  if (parse_context.is_inlinee()) {
     uint64_t encode = DeoptValueEncoding(0, DeoptValueEncoding::MethodType, T_METADATA).encode();
 #ifdef ASSERT
     if (log_is_enabled(Trace, jeandle)) {
@@ -244,7 +246,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     }
 #endif
     args.push_back(builder.getInt64(encode));
-    args.push_back(builder.getInt64(uint64_t(JeandleCompilation::current()->inlinee())));
+    args.push_back(builder.getInt64(uint64_t(parse_context.method())));
   }
 
   args.push_back(builder.getInt32(bci));
@@ -314,7 +316,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     args.push_back(obj.value());
     args.push_back(lock);
   }
-  if (JeandleCompilation::current()->inlinee() == nullptr) {
+  if (parse_context.is_root()) {
     llvm::Value* orig_pc_slot = JeandleCompilation::current()->compiled_code()->orig_pc_slot();
     assert(orig_pc_slot != nullptr, "sanity");
     uint64_t encode = DeoptValueEncoding(0, DeoptValueEncoding::OrigPcSlotType, T_ADDRESS).encode();
@@ -704,19 +706,20 @@ void BasicBlockBuilder::mark_unloaded_catch_klass() {
   }
 }
 
-JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
+JeandleAbstractInterpreter::JeandleAbstractInterpreter(const JeandleParseContext& parse_context,
                                                        int entry_bci,
                                                        llvm::Module& target_module,
                                                        JeandleCompiledCode& code,
                                                        uint* trap_hist) :
-                                                       _method(method),
-                                                       _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module, entry_bci != InvocationEntryBci)),
+                                                       _parse_context(parse_context),
+                                                       _method(parse_context.method()),
+                                                       _llvm_func(JeandleFuncSig::create_llvm_func(_method, target_module, entry_bci != InvocationEntryBci)),
                                                        _entry_bci(entry_bci),
                                                        _context(&target_module.getContext()),
                                                        _bytecodes(_method),
                                                        _module(target_module),
                                                        _compiled_code(code),
-                                                       _block_builder(new BasicBlockBuilder(method, entry_bci, _context, _llvm_func)),
+                                                       _block_builder(new BasicBlockBuilder(_method, entry_bci, _context, _llvm_func)),
                                                        _ir_builder(_block_builder->entry_block()->header_llvm_block()),
                                                        _block(nullptr),
                                                        _jvm(nullptr),
@@ -1333,12 +1336,12 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_tableswitch: table_switch(); break;
       case Bytecodes::_lookupswitch: lookup_switch(); break;
 
-      case Bytecodes::_ireturn: add_safepoint_poll(); return_current(_jvm->ipop()); break;
-      case Bytecodes::_lreturn: add_safepoint_poll(); return_current(_jvm->lpop()); break;
-      case Bytecodes::_freturn: add_safepoint_poll(); return_current(_jvm->fpop()); break;
-      case Bytecodes::_dreturn: add_safepoint_poll(); return_current(_jvm->dpop()); break;
-      case Bytecodes::_areturn: add_safepoint_poll(); return_current(_jvm->apop()); break;
-      case Bytecodes::_return:  add_safepoint_poll(); return_current(nullptr); break;
+      case Bytecodes::_ireturn: add_return_safepoint_poll(); return_current(_jvm->ipop()); break;
+      case Bytecodes::_lreturn: add_return_safepoint_poll(); return_current(_jvm->lpop()); break;
+      case Bytecodes::_freturn: add_return_safepoint_poll(); return_current(_jvm->fpop()); break;
+      case Bytecodes::_dreturn: add_return_safepoint_poll(); return_current(_jvm->dpop()); break;
+      case Bytecodes::_areturn: add_return_safepoint_poll(); return_current(_jvm->apop()); break;
+      case Bytecodes::_return:  add_return_safepoint_poll(); return_current(nullptr); break;
 
       // References:
 
@@ -1506,7 +1509,19 @@ void JeandleAbstractInterpreter::load_constant() {
         value = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
       } else {
         llvm::Value* oop_handle = JeandleCompilation::current()->find_or_insert_oop(con_obj);
-        value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+        llvm::LoadInst* load_inst =
+            _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+        ciKlass* klass = con_obj->klass();
+        if (klass->is_loaded()) {
+          Klass* klass_enc = (Klass*)(klass->constant_encoding());
+          llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {
+              llvm::ConstantAsMetadata::get(_ir_builder.getInt64((intptr_t)klass_enc))
+          });
+          load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlass, klass_md);
+          load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlassExact,
+                                 llvm::MDNode::get(*_context, {}));
+        }
+        value = load_inst;
       }
 
       break;
@@ -1851,6 +1866,12 @@ void JeandleAbstractInterpreter::invoke() {
   llvm::FunctionCallee callee = _module.getOrInsertFunction(callee_name, func_type);
   llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
   func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::JavaMethod));
+  // Accessor-only inlining may be decided before LLVM asks the VM to parse the
+  // callee body, so declarations must carry the same marker as definitions.
+  if (target->is_accessor()) {
+    func->addFnAttr(llvm::Attribute::get(func->getContext(),
+                                         llvm::jeandle::Attribute::JavaAccessorMethod));
+  }
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   func->setGC(llvm::jeandle::JeandleGC);
 
@@ -2359,7 +2380,7 @@ llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef ja
 
 llvm::OperandBundleDef JeandleAbstractInterpreter::create_current_deopt_bundle() {
   ensure_orig_pc_slot();
-  return llvm::OperandBundleDef("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
+  return llvm::OperandBundleDef("deopt", _jvm->deopt_args(_ir_builder, _parse_context, _bytecodes.cur_bci()));
 }
 
 // TODO: Handle field attributions like final, stable.
@@ -2555,6 +2576,13 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
 
 void JeandleAbstractInterpreter::add_safepoint_poll() {
   call_java_op("jeandle.safepoint_poll", {}, {create_current_deopt_bundle()});
+}
+
+void JeandleAbstractInterpreter::add_return_safepoint_poll() {
+  if (!_parse_context.is_root()) {
+    return;
+  }
+  add_safepoint_poll();
 }
 
 void JeandleAbstractInterpreter::arraylength() {
@@ -2968,7 +2996,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 }
 
 void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad) {
-  if (JeandleCompilation::current()->inlinee() != nullptr) {
+  if (_parse_context.is_inlinee()) {
     llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(
         _ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()),
         llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));

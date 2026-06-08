@@ -132,11 +132,11 @@ bool jeandle_get_inline_callee_ir(uintptr_t callee_name) {
     return false;
   }
   {
-    SetInlinee inlinee_guard(callee);
-    JeandleAbstractInterpreter interpret(callee, -1, *M, *comp->compiled_code(), comp->trap_hist());
+    JeandleParseContext parse_context = JeandleParseContext::inlinee(callee);
+    JeandleAbstractInterpreter interpret(parse_context, -1, *M, *comp->compiled_code(), comp->trap_hist());
     llvm::Function* resolved_func = M->getFunction((const char*)callee_name);
     assert(resolved_func != nullptr, "callee function not found");
-    JeandleFuncSig::setup_description(resolved_func);
+    JeandleFuncSig::setup_description(resolved_func, callee->is_accessor());
     resolved_func->setLinkage(llvm::GlobalValue::AvailableExternallyLinkage);
   }
   return !comp->error_occurred();

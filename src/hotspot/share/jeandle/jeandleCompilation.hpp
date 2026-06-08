@@ -155,9 +155,6 @@ class JeandleCompilation : public StackObj {
 
   ciMethod* method() { return _method; }
 
-  ciMethod* inlinee() { return _inlinee; }
-  void set_inlinee(ciMethod* method) { _inlinee = method; }
-
   void add_method_for_llvm_name(const char* name, ciMethod* method) { _method_for_llvm_name[name] = method; }
   ciMethod* method_for_llvm_name(const char* name) const { return _method_for_llvm_name.lookup(name); }
   void note_root_method_for_llvm_name(const char* name);
@@ -188,7 +185,6 @@ class JeandleCompilation : public StackObj {
   llvm::DataLayout* _data_layout;
   ciEnv* _env;
   ciMethod* _method;
-  ciMethod* _inlinee;
   const std::string _name;
   int _entry_bci;
   std::unique_ptr<llvm::LLVMContext> _context;
@@ -227,16 +223,6 @@ class JeandleCompilation : public StackObj {
 
   void dump_obj();
   void dump_ir(bool optimized);
-};
-
-class SetInlinee : public StackObj {
-public:
-  SetInlinee(ciMethod* method) {
-    JeandleCompilation::current()->set_inlinee(method);
-  }
-  ~SetInlinee() {
-    JeandleCompilation::current()->set_inlinee(nullptr);
-  }
 };
 
 #ifdef ASSERT

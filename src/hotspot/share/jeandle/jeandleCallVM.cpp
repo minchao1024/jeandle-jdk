@@ -37,7 +37,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
                                                      llvm::Function::ExternalLinkage,
                                                      name,
                                                      target_module);
-  JeandleFuncSig::setup_description(llvm_func, true /* is_stub */);
+  JeandleFuncSig::setup_description(llvm_func, false /* is_accessor */, true /* is_stub */);
   llvm::LLVMContext& context = target_module.getContext();
 
   // Add needed metadatas.

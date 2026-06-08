@@ -61,13 +61,17 @@ void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features) {
   }
 }
 
-void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
+void JeandleFuncSig::setup_description(llvm::Function* func, bool is_accessor, bool is_stub) {
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   func->setGC(llvm::jeandle::JeandleGC);
 
   if (!is_stub) {
     func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::JavaMethod));
+    if (is_accessor) {
+      func->addFnAttr(llvm::Attribute::get(func->getContext(),
+                                           llvm::jeandle::Attribute::JavaAccessorMethod));
+    }
     llvm::GlobalVariable* personality_func = func->getParent()->getGlobalVariable("jeandle.personality");
     assert(personality_func != nullptr, "no personality function");
     func->setPersonalityFn(personality_func);

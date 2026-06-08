@@ -32,6 +32,7 @@
 
 #include "jeandle/jeandleExceptionHandlerTable.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
+#include "jeandle/jeandleParseContext.hpp"
 #include "jeandle/jeandleReadELF.hpp"
 #include "jeandle/jeandleResourceObj.hpp"
 #include "jeandle/jeandleUtils.hpp"
@@ -302,7 +303,9 @@ class JeandleCompiledCode : public StackObj {
                                   StackMapParser::record_iterator& record,
                                   StackMapParser::RecordAccessor::location_iterator& location,
                                   CallSiteInfo* call_info,
-                                  int& num_deopts);
+                                  int& num_deopts,
+                                  const JeandleParseContext& parse_context,
+                                  ciMethod*& next_inlinee);
   LocationValue* new_location_value(const StackMapParser::LocationAccessor& location, Location::Type type);
   void fill_one_scope_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode,
                             const StackMapParser::LocationAccessor& location, GrowableArray<ScopeValue*>* array);
