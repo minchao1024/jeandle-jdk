@@ -405,7 +405,7 @@ class JeandleAbstractInterpreter : public StackObj {
   } DispatchedDest;
 
   DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
-   // Generate a series of IR to dispatch an exception to its handler.
+  // Generate a series of IR to dispatch an exception to its handler.
   void dispatch_exception_to_handler(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
   void throw_exception(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
   void uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason);

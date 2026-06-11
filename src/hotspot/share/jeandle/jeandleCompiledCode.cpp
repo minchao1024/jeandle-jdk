@@ -545,6 +545,7 @@ int JeandleCompiledCode::parse_stackmap_prologue(StackMapParser::record_iterator
   assert(_frame_size > 0, "frame size must be greater than zero");
 
   // The first 2 constants are ignored, the third constant is the number of deopt operands
+  assert(location != record->location_end(), "must be in range");
 
   // Ignore frame size
   auto first = *(location++);
@@ -600,8 +601,7 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
   GrowableArray<ScopeValue*>* locals = num_deopts > 0 ? new GrowableArray<ScopeValue*>(current_method->max_locals()) : nullptr;
   GrowableArray<ScopeValue*>* stack  = num_deopts > 0 ? new GrowableArray<ScopeValue*>(current_method->max_stack()) : nullptr;
   GrowableArray<MonitorValue*>* monitors = num_deopts > 0 ? new GrowableArray<MonitorValue*>() : nullptr;
-  bool found_inlinee_marker = false;
-  while (!found_inlinee_marker && num_deopts > 0) {
+  while (num_deopts > 0) {
     // local and stack deopt arguments are passed as a pair: <encode, value>
     // monitor deopt arguments are passed as a tuple: <encode, object, lock>
     assert(location != record->location_end(), "must be in range");
@@ -652,20 +652,17 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
         // MethodType is the first value in the stack map of inlinee
         // and it also serves as a marker to stop parsing the previous stack map.
         assert(location != record->location_end(), "must be in range");
-        ciMethod* method = (ciMethod*)(StackMapUtil::getConstantUlong(stackmaps, *(location++)));
-        next_inlinee = method;
-        found_inlinee_marker = true;
+        next_inlinee = (ciMethod*)(StackMapUtil::getConstantUlong(stackmaps, *(location++)));
         num_deopts -= 2;
-        break;
+        // The marker belongs to the next inlinee scope. Return the caller scope
+        // now and let the outer loop continue parsing from the same stackmap
+        // record; only the youngest scope consumes the oopmap tail.
+        return new JeandleStackMap(bci, current_method, nullptr, locals, stack, monitors, reexecute);
       }
       default:
         Unimplemented();
     }
 
-  }
-
-  if (found_inlinee_marker) {
-    return new JeandleStackMap(bci, current_method, nullptr, locals, stack, monitors, reexecute);
   }
 
   // build oop map
