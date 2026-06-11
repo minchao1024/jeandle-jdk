@@ -39,6 +39,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils.h"
 
 #include <algorithm>
@@ -61,11 +62,14 @@
 #include "ci/ciCallProfile.hpp"
 #include "ci/ciKlass.hpp"
 #include "ci/ciObject.hpp"
+#include "ci/ciReplay.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/ciStreams.hpp"
 #include "ci/ciTypeFlow.hpp"
 #include "ci/ciUtilities.inline.hpp"
 #include "compiler/compilationPolicy.hpp"
+#include "compiler/compilerDirectives.hpp"
+#include "compiler/compiler_globals.hpp"
 #include "compiler/compilerOracle.hpp"
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
@@ -76,7 +80,6 @@
 #include "runtime/thread.hpp"
 #include "runtime/timer.hpp"
 #include "runtime/timerTrace.hpp"
-#include "compiler/compiler_globals.hpp"
 #include "utilities/ostream.hpp"
 
 enum JeandleTimerName : int {
@@ -148,6 +151,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        ciMethod* method,
                                        int entry_bci,
                                        bool should_install,
+                                       DirectiveSet* directive,
                                        llvm::MemoryBuffer* template_buffer) :
                                        _target_machine(target_machine),
                                        _data_layout(data_layout),
@@ -156,6 +160,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _name(method->get_Method()->name_and_sig_as_C_string()),
                                        _entry_bci(entry_bci),
                                        _context(std::make_unique<llvm::LLVMContext>()),
+                                       _replay_inline_data(nullptr),
                                        _inline_tree_root(nullptr),
                                        _oops(),
                                        _oop_idx(0),
@@ -178,6 +183,11 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   if (error_occurred()) {
     _env->record_method_not_compilable(_error_msg);
     return;
+  }
+
+  assert(directive != nullptr, "directive must exist");
+  if (directive->ReplayInlineOption) {
+    _replay_inline_data = ciReplay::load_inline_data(method, entry_bci, env->comp_level());
   }
 
   // Let's compile.
@@ -210,6 +220,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _entry_bci(-1),
                                        _context(std::move(context)),
                                        _llvm_module(std::make_unique<llvm::Module>(name, *_context)),
+                                       _replay_inline_data(nullptr),
                                        _inline_tree_root(nullptr),
                                        _oops(),
                                        _oop_idx(0),
@@ -350,9 +361,8 @@ static methodHandle jeandle_method_handle(ciMethod* method) {
 }
 
 static bool jeandle_force_inline(ciMethod* method) {
-  // C2 also consults DirectiveSet and ciReplay here. Jeandle currently has no
-  // C2 Compile object or replay-inline-data equivalent, so keep the checks that
-  // are available from global method metadata / CompilerOracle.
+  // C2 also consults ciReplay in InlineTree::should_inline. Jeandle does that
+  // at the call site because replay decisions need caller bci and inline depth.
   return method->force_inline() ||
          CompilerOracle::should_inline(jeandle_method_handle(method));
 }
@@ -511,14 +521,27 @@ const char* JeandleInlineTree::check_can_parse(ciMethod* callee) const {
 bool JeandleInlineTree::should_inline(JeandleCompilation* comp,
                                       ciMethod* callee,
                                       ciMethod* caller,
-                                      int /* caller_bci */,
+                                      int caller_bci,
+                                      bool& forced_inline,
                                       ciCallProfile& profile) {
   if (jeandle_force_inline(callee)) {
+    forced_inline = true;
     return true;
   }
 
-  // TODO: Support ciReplay forced inline decisions once Jeandle has replay
-  // inline data analogous to C2's Compile::replay_inline_data().
+  bool should_delay = false;
+  int replay_inline_depth = inline_depth() + 1;
+  if (ciReplay::should_inline(comp->replay_inline_data(),
+                              callee,
+                              caller_bci,
+                              replay_inline_depth,
+                              should_delay)) {
+    // TODO: Replay records can mark an inline as late/incremental. Jeandle has
+    // no late inline queue yet, so replay-forced inlines are performed
+    // immediately even when should_delay is true.
+    forced_inline = true;
+    return true;
+  }
 
   int size = callee->code_size_for_inlining();
   if (callee->interpreter_throwout_count() > InlineThrowCount &&
@@ -547,7 +570,7 @@ bool JeandleInlineTree::should_inline(JeandleCompilation* comp,
 bool JeandleInlineTree::should_not_inline(JeandleCompilation* comp,
                                           ciMethod* callee,
                                           ciMethod* caller,
-                                          int /* caller_bci */,
+                                          int caller_bci,
                                           ciCallProfile& profile) {
   if (callee->is_abstract()) {
     return true;
@@ -581,8 +604,26 @@ bool JeandleInlineTree::should_not_inline(JeandleCompilation* comp,
     return true;
   }
 
-  // TODO: Support ciReplay negative inline decisions once Jeandle has replay
-  // inline data analogous to C2's Compile::replay_inline_data().
+  bool should_delay = false;
+  int replay_inline_depth = inline_depth() + 1;
+  if (ciReplay::should_inline(comp->replay_inline_data(),
+                              callee,
+                              caller_bci,
+                              replay_inline_depth,
+                              should_delay)) {
+    // TODO: Jeandle currently ignores replay late-inline timing and treats this
+    // as an immediate replay-forced inline.
+    return false;
+  }
+  if (ciReplay::should_not_inline(comp->replay_inline_data(),
+                                  callee,
+                                  caller_bci,
+                                  replay_inline_depth)) {
+    return true;
+  }
+  if (ciReplay::should_not_inline(callee)) {
+    return true;
+  }
 
   if (callee->force_inline()) {
     return false;
@@ -663,12 +704,12 @@ bool JeandleInlineTree::try_to_inline(JeandleCompilation* comp,
                                       ciMethod* caller,
                                       int caller_bci,
                                       ciCallProfile& profile) {
-  bool forced_inline = jeandle_force_inline(callee);
+  bool forced_inline = false;
   if (jeandle_exceeds_desired_method_limit(callee, (int)count_inline_bcs())) {
     return false;
   }
 
-  if (!should_inline(comp, callee, caller, caller_bci, profile)) {
+  if (!should_inline(comp, callee, caller, caller_bci, forced_inline, profile)) {
     return false;
   }
   if (should_not_inline(comp, callee, caller, caller_bci, profile)) {
@@ -797,6 +838,29 @@ int JeandleInlineTree::count() const {
   return result;
 }
 
+void JeandleInlineTree::print(outputStream* out) const {
+  assert(method() != nullptr, "inline tree node must have a method");
+  method()->dump_name_as_ascii(out);
+  out->cr();
+  for (int i = 0; i < _subtrees.length(); i++) {
+    _subtrees.at(i)->print_impl(out, "", i == _subtrees.length() - 1);
+  }
+}
+
+void JeandleInlineTree::print_impl(outputStream* out,
+                                   const std::string& prefix,
+                                   bool is_last) const {
+  assert(method() != nullptr, "inline tree node must have a method");
+  out->print("%s%s@%d ", prefix.c_str(), is_last ? "`- " : "|- ", caller_bci());
+  method()->dump_name_as_ascii(out);
+  out->cr();
+
+  std::string child_prefix = prefix + (is_last ? "   " : "|  ");
+  for (int i = 0; i < _subtrees.length(); i++) {
+    _subtrees.at(i)->print_impl(out, child_prefix, i == _subtrees.length() - 1);
+  }
+}
+
 void JeandleInlineTree::dump_replay_data(outputStream* out, int depth_adjust) const {
   // Keep the replay inline record format identical to C2:
   //   <inline_depth> <caller_bci> <inline_late> <method>
@@ -810,10 +874,9 @@ void JeandleInlineTree::dump_replay_data(outputStream* out, int depth_adjust) co
   }
 }
 
-void JeandleCompilation::note_root_method_for_llvm_name(const char* name) {
-  assert(_method != nullptr, "root method mapping only exists for Java method compilation");
+void JeandleCompilation::initialize_inline_tree() {
+  assert(_method != nullptr, "root inline tree only exists for Java method compilation");
   assert(_inline_tree_root == nullptr, "root inline tree must be initialized once");
-  _method_for_llvm_name[name] = _method;
   _inline_tree_root = new (_arena) JeandleInlineTree(nullptr, _method, -1, MaxInlineLevel, _arena);
 }
 
@@ -875,7 +938,65 @@ void JeandleCompilation::dump_inline_data_reduced(outputStream* out) {
   }
 }
 
+static std::string construct_dump_path(const std::string& method_name,
+                                       const std::string& timestamp,
+                                       const std::string& suffix);
+
+void JeandleCompilation::dump_inline_callee_replay_module() {
+  assert(JeandleRecordVMCallbacks, "inline callee replay module is only dumped when recording VM callbacks");
+  assert(_llvm_module != nullptr, "llvm module must exist");
+  std::unique_ptr<llvm::Module> replay_module = llvm::CloneModule(*_llvm_module);
+  assert(replay_module != nullptr, "failed to clone inline callee replay module");
+  std::string root_name = JeandleFuncSig::method_name_with_signature(_method);
+
+  // Keep only non-root Java method bodies for replay. Calls inside those methods
+  // may still reference helper/runtime declarations, so non-replay functions are
+  // first reduced to declarations and then erased only when they are unused.
+  for (llvm::Function& F : *replay_module) {
+    bool is_non_root_java_method =
+        F.hasFnAttribute(llvm::jeandle::Attribute::JavaMethod) && F.getName() != root_name;
+    if (is_non_root_java_method || F.isDeclaration()) {
+      continue;
+    }
+    F.deleteBody();
+  }
+
+  llvm::SmallVector<llvm::Function*, 16> unused_functions;
+  for (llvm::Function& F : *replay_module) {
+    bool is_non_root_java_method =
+        F.hasFnAttribute(llvm::jeandle::Attribute::JavaMethod) && F.getName() != root_name;
+    if (!is_non_root_java_method && F.isDeclaration() && F.use_empty()) {
+      unused_functions.push_back(&F);
+    }
+  }
+  for (llvm::Function* F : unused_functions) {
+    F->eraseFromParent();
+  }
+
+  std::string dump_path = construct_dump_path(_llvm_module->getModuleIdentifier(), _comp_start_time, "_inline_callees.ll");
+  std::error_code err_code;
+  llvm::raw_fd_ostream dump_stream(dump_path, err_code, llvm::sys::fs::OF_TextWithCRLF);
+
+  if (err_code) {
+    log_warning(jeandle)("Could not open inline callee IR replay file: %s, %s\n",
+                         dump_path.c_str(),
+                         err_code.message().c_str());
+    return;
+  }
+
+  replay_module->print(dump_stream, nullptr);
+}
+
 void JeandleCompilation::install_code() {
+  if (JeandlePrintInlineTree && _inline_tree_root != nullptr) {
+    stringStream inline_tree;
+    inline_tree.print_cr("Jeandle inline tree:");
+    _inline_tree_root->print(&inline_tree);
+
+    ttyLocker ttyl;
+    tty->print("%s", inline_tree.as_string());
+  }
+
   _env->register_method(_method,
                         _entry_bci,
                         _code.offsets(),
@@ -925,7 +1046,7 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
   _llvm_module->setModuleIdentifier(JeandleFuncSig::method_name(_method));
   _llvm_module->setDataLayout(*_data_layout);
   _llvm_module->setTargetTriple(_target_machine->getTargetTriple());
-  note_root_method_for_llvm_name(JeandleFuncSig::method_name_with_signature(_method).c_str());
+  initialize_inline_tree();
 
   llvm::NamedMDNode* metadata_node = _llvm_module->getOrInsertNamedMetadata(llvm::jeandle::Metadata::JavaMethodCompilation);
   assert(metadata_node != nullptr, "invalid metadata node");
@@ -934,7 +1055,8 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
 static std::string construct_dump_path(const std::string& method_name,
                                        const std::string& timestamp,
                                        const std::string& suffix) {
-  assert(suffix == ".ll" || suffix == "_optimized.ll" || suffix == ".o" || suffix == ".cblog", "invalid suffix for dump file of Jeandle compiler");
+  assert(suffix == ".ll" || suffix == "_optimized.ll" || suffix == ".o" || suffix == ".cblog" || suffix == "_inline_callees.ll",
+         "invalid suffix for dump file of Jeandle compiler");
   std::string dump_dir = JeandleDumpDirectory ? std::string(JeandleDumpDirectory) : std::string("./");
 
   // Full name.

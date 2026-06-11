@@ -249,6 +249,10 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     args.push_back(builder.getInt64(uint64_t(parse_context.method())));
   }
 
+  // Duplicate the BCI as a BCI marker for the LLVM backend.
+  // If LLVM later knows how to parse the full deopt bundle layout, this
+  // duplicated-BCI convention can be removed together with the corresponding
+  // expectation in TestScopeValues.java.
   args.push_back(builder.getInt32(bci));
   args.push_back(builder.getInt32(bci));
   for (size_t i = 0; i < _locals.size(); i++) {
@@ -808,8 +812,8 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
                                                               llvm::jeandle::AddrSpace::CHeapAddrSpace,
                                                               nullptr,
                                                               "BasicLock");
-      push_allocated_basic_lock(lock);
-      assert(allocated_basic_lock_at(initial_jvm->locks_size()) == lock, "unbalanced monitors");
+      add_basic_lock_slot(lock);
+      assert(basic_lock_slot_at(initial_jvm->locks_size()) == lock, "unbalanced monitors");
       store_to_address(lock, displaced_hdr, T_ADDRESS, false);
 
       if (index == 0 && _method->is_synchronized()) {
@@ -1010,8 +1014,8 @@ void JeandleAbstractInterpreter::interpret() {
       llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
       llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
                                                               llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
-      push_allocated_basic_lock(lock);
-      assert(allocated_basic_lock_at(_jvm->locks_size()) == lock, "unbalanced monitors");
+      add_basic_lock_slot(lock);
+      assert(basic_lock_slot_at(_jvm->locks_size()) == lock, "unbalanced monitors");
       // record object and lock for synchronized method
       TypedValue obj(BasicType::T_OBJECT, lock_obj);
       _sync_lock.set_object(obj);
@@ -1862,10 +1866,10 @@ void JeandleAbstractInterpreter::invoke() {
   BasicType return_type = method_signature->return_type()->basic_type();
   llvm::FunctionType* func_type = llvm::FunctionType::get(JeandleType::java2llvm(return_type, *_context), args_type, false);
   std::string callee_name = JeandleFuncSig::method_name_with_signature(target);
-  JeandleCompilation::current()->add_method_for_llvm_name(callee_name.c_str(), target);
   llvm::FunctionCallee callee = _module.getOrInsertFunction(callee_name, func_type);
   llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
   func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::JavaMethod));
+  JeandleFuncSig::setup_java_method_pointer(func, target);
   // Accessor-only inlining may be decided before LLVM asks the VM to parse the
   // callee body, so declarations must carry the same marker as definitions.
   if (target->is_accessor()) {
@@ -3303,17 +3307,17 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
   if (lock.lock() == nullptr) {
     llvm::Value* basic_lock = nullptr;
     int monitor_nest_level = _jvm->locks_size();
-    if (need_alloc_for(monitor_nest_level)) {
+    if (needs_basic_lock_slot(monitor_nest_level)) {
       // Allocate a BasicLock on stack.
       // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
       llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
       basic_lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
                                                        llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
       // Save the basic_lock for later reuse.
-      push_allocated_basic_lock(basic_lock);
-      assert(allocated_basic_lock_at(monitor_nest_level) == basic_lock, "unbalanced monitors");
+      add_basic_lock_slot(basic_lock);
+      assert(basic_lock_slot_at(monitor_nest_level) == basic_lock, "unbalanced monitors");
     } else {
-      basic_lock = allocated_basic_lock_at(monitor_nest_level);
+      basic_lock = basic_lock_slot_at(monitor_nest_level);
     }
     lock.set_lock(basic_lock);
   }
@@ -3399,7 +3403,7 @@ void JeandleAbstractInterpreter::monitorexit() {
   llvm::Value* obj = _jvm->apop();
 
   LockValue lock = _jvm->pop_lock();
-  assert(allocated_basic_lock_at(_jvm->locks_size()) == lock.lock(), "unbalanced monitors");
+  assert(basic_lock_slot_at(_jvm->locks_size()) == lock.lock(), "unbalanced monitors");
 
   shared_unlock(lock);
 }

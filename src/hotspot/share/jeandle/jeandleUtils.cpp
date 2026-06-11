@@ -85,6 +85,8 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
 
   llvm::Function* existing = target_module.getFunction(func_name);
   if (existing != nullptr) {
+    assert(existing->getFnAttribute(llvm::jeandle::Attribute::JavaMethodPointer).isStringAttribute(),
+           "existing Java method function must have java method pointer");
     return existing;
   }
 
@@ -173,6 +175,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
   }
 
   setup_description(func, method->is_accessor());
+  setup_java_method_pointer(func, method);
 
   return func;
 }
@@ -190,6 +193,15 @@ std::string JeandleFuncSig::method_name(ciMethod* method) {
 std::string JeandleFuncSig::method_name_with_signature(ciMethod* method) {
   std::string signature = std::string(method->signature()->as_symbol()->as_utf8());
   return method_name(method) + signature;
+}
+
+void JeandleFuncSig::setup_java_method_pointer(llvm::Function* func, ciMethod* method) {
+  assert(func != nullptr, "func must not be null");
+  assert(method != nullptr, "method must not be null");
+
+  func->addFnAttr(llvm::Attribute::get(func->getContext(),
+                                       llvm::jeandle::Attribute::JavaMethodPointer,
+                                       std::to_string((uintptr_t)method)));
 }
 
 bool is_jeandle_compiler_thread(Thread* t) {

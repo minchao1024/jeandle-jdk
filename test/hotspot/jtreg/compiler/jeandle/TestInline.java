@@ -21,28 +21,153 @@
 /**
  * @test test inline feature for jeandle compiler
  * @library /test/lib /
- * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox
+ * @build jdk.test.lib.Asserts jdk.test.lib.process.OutputAnalyzer
+ *        jdk.test.lib.process.ProcessTools jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
- * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *                   -XX:CompileCommand=compileonly,compiler.jeandle.TestInline::caller*
- *                   -XX:CompileCommand=compileonly,compiler.jeandle.TestInline::callee*
- *                   -XX:CompileCommand=inline,compiler.jeandle.TestInline::callee*
- *                   -XX:CompileCommand=dontinline,compiler.jeandle.TestInline::blackHole
- *                   -XX:-TieredCompilation -Xbatch
- *                   -XX:+UseJeandleCompiler compiler.jeandle.TestInline
+ * @run driver compiler.jeandle.TestInline
  */
 
 package compiler.jeandle;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 
 import jdk.test.lib.Asserts;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 import jdk.test.whitebox.WhiteBox;
 
 public class TestInline {
-    private static WhiteBox wb = WhiteBox.getWhiteBox();
+    private static final String CLASS = TestInline.class.getName();
+    private static WhiteBox wb;
 
     public static void main(String[] args) throws Exception {
+        if (args.length == 0) {
+            runDriver();
+            return;
+        }
+        if ("run".equals(args[0])) {
+            runWorkload();
+            return;
+        }
+        throw new IllegalArgumentException("unknown mode: " + args[0]);
+    }
+
+    private static void runDriver() throws Exception {
+        OutputAnalyzer output = runTestProcess();
+        output.shouldHaveExitValue(0);
+
+        assertInlined(output, "callerSimple", "calleeSimple");
+        assertInlined(output, "callerWithException", "calleeThrow");
+        assertInlined(output, "callerWithLock", "calleeWithLock");
+        assertInlined(output, "callerDeopt", "calleeDeopt");
+        assertInlined(output, "callerWithBranch", "calleeBranch");
+        assertInlined(output, "callerWithLoop", "calleeLoop");
+        assertInlined(output, "callerChained", "calleeB");
+        assertInlinedCount(output, "callerRepeatedCallee", "calleeRepeated", 2);
+        assertNotInlined(output, "callerDontInline", "helperDontInline");
+    }
+
+    private static OutputAnalyzer runTestProcess() throws Exception {
+        List<String> cmd = new ArrayList<>();
+        cmd.add("-Xbootclasspath/a:.");
+        cmd.add("-XX:+UnlockDiagnosticVMOptions");
+        cmd.add("-XX:+WhiteBoxAPI");
+        cmd.add("-XX:+UseJeandleCompiler");
+        cmd.add("-XX:+JeandlePrintInlineTree");
+        cmd.add("-XX:-TieredCompilation");
+        cmd.add("-Xbatch");
+        cmd.add("-XX:CompileCommand=quiet");
+        cmd.add("-XX:CompileCommand=compileonly," + CLASS + "::caller*");
+        cmd.add("-XX:CompileCommand=compileonly," + CLASS + "::callee*");
+        cmd.add("-XX:CompileCommand=compileonly," + CLASS + "::helperDontInline");
+        cmd.add("-XX:CompileCommand=inline," + CLASS + "::callee*");
+        cmd.add("-XX:CompileCommand=dontinline," + CLASS + "::helperDontInline");
+        cmd.add(CLASS);
+        cmd.add("run");
+
+        ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(cmd);
+        return ProcessTools.executeProcess(pb);
+    }
+
+    private static void assertInlined(OutputAnalyzer output, String rootMethod, String calleeMethod) {
+        List<String> tree = inlineTreeFor(output, rootMethod);
+        Asserts.assertTrue(containsMethod(tree, calleeMethod),
+                "expected " + calleeMethod + " to be inlined into " + rootMethod + "\n" + formatTree(tree));
+    }
+
+    private static void assertNotInlined(OutputAnalyzer output, String rootMethod, String calleeMethod) {
+        List<String> tree = inlineTreeFor(output, rootMethod);
+        Asserts.assertFalse(containsMethod(tree, calleeMethod),
+                "expected " + calleeMethod + " not to be inlined into " + rootMethod + "\n" + formatTree(tree));
+    }
+
+    private static void assertInlinedCount(OutputAnalyzer output, String rootMethod, String calleeMethod, int expectedCount) {
+        List<String> tree = inlineTreeFor(output, rootMethod);
+        int count = countMethod(tree, calleeMethod);
+        Asserts.assertEquals(count, expectedCount,
+                "unexpected inline count for " + calleeMethod + " in " + rootMethod + "\n" + formatTree(tree));
+    }
+
+    private static List<String> inlineTreeFor(OutputAnalyzer output, String rootMethod) {
+        List<String> lines = output.asLines();
+        List<String> lastMatch = null;
+        for (int i = 0; i < lines.size(); i++) {
+            if (!"Jeandle inline tree:".equals(lines.get(i))) {
+                continue;
+            }
+            if (++i >= lines.size()) {
+                break;
+            }
+            List<String> tree = new ArrayList<>();
+            tree.add(lines.get(i));
+            for (int j = i + 1; j < lines.size(); j++) {
+                String line = lines.get(j);
+                if ("Jeandle inline tree:".equals(line)) {
+                    break;
+                }
+                if (line.startsWith("`- ") || line.startsWith("|- ") ||
+                    line.startsWith("   ") || line.startsWith("|  ")) {
+                    tree.add(line);
+                    continue;
+                }
+                break;
+            }
+            if (containsMethodName(tree.get(0), rootMethod)) {
+                lastMatch = tree;
+            }
+        }
+        if (lastMatch != null) {
+            return lastMatch;
+        }
+        throw new AssertionError("did not find Jeandle inline tree for " + rootMethod + "\n" + output.getOutput());
+    }
+
+    private static boolean containsMethod(List<String> tree, String method) {
+        return countMethod(tree, method) > 0;
+    }
+
+    private static int countMethod(List<String> tree, String method) {
+        int count = 0;
+        for (int i = 1; i < tree.size(); i++) {
+            if (containsMethodName(tree.get(i), method)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static boolean containsMethodName(String line, String method) {
+        return line.contains(" " + method + " ");
+    }
+
+    private static String formatTree(List<String> tree) {
+        return String.join(System.lineSeparator(), tree);
+    }
+
+    private static void runWorkload() throws Exception {
+        wb = WhiteBox.getWhiteBox();
         testSimpleInline();
         testInlineWithException();
         testInlineWithLock();
@@ -50,6 +175,8 @@ public class TestInline {
         testInlineWithBranch();
         testInlineWithLoop();
         testInlineChained();
+        testInlineRepeatedCallee();
+        testDontInline();
     }
 
     // -------------------------------------------------------
@@ -163,26 +290,23 @@ public class TestInline {
         return obj.value();
     }
 
-    public static int callerDeopt() {
-        A a = new A();
+    public static int callerDeopt(I obj) {
         int sum = 0;
         for (int i = 0; i < 100_000; i++) {
-            sum += calleeDeopt(a);
+            sum += calleeDeopt(obj);
         }
         return sum;
     }
 
     static void testInlineWithDeopt() throws Exception {
-        int result = callerDeopt();
+        int result = callerDeopt(new A());
         Asserts.assertEquals(result, 100_000);
 
-        Method m = TestInline.class.getDeclaredMethod("callerDeopt");
+        Method m = TestInline.class.getDeclaredMethod("callerDeopt", I.class);
         Asserts.assertTrue(wb.isMethodCompiled(m));
 
-        // Now call with a different type to trigger deoptimization
-        B b = new B();
-        int result2 = calleeDeopt(b);
-        Asserts.assertEquals(result2, 2);
+        int result2 = callerDeopt(new B());
+        Asserts.assertEquals(result2, 200_000);
     }
 
     // -------------------------------------------------------
@@ -244,7 +368,8 @@ public class TestInline {
     }
 
     // -------------------------------------------------------
-    // 7. Chained inline: A calls B calls C, all inlined
+    // 7. Chained call: verify the caller inlines its direct callee and keeps
+    //    correct behavior when that callee contains another call.
     // -------------------------------------------------------
     public static int calleeC(int x) {
         return x + 1;
@@ -274,5 +399,59 @@ public class TestInline {
         Asserts.assertTrue(wb.isMethodCompiled(m));
     }
 
-    public static void blackHole() {}
+    // -------------------------------------------------------
+    // 8. Same callee at multiple call sites.
+    // -------------------------------------------------------
+    public static int calleeRepeated(int x) {
+        return x + 7;
+    }
+
+    public static int callerRepeatedCallee() {
+        int sum = 0;
+        for (int i = 0; i < 100_000; i++) {
+            sum += calleeRepeated(i);
+            sum += calleeRepeated(i + 1);
+        }
+        return sum;
+    }
+
+    static void testInlineRepeatedCallee() throws Exception {
+        int result = callerRepeatedCallee();
+        int expected = 0;
+        for (int i = 0; i < 100_000; i++) {
+            expected += i + 7;
+            expected += i + 8;
+        }
+        Asserts.assertEquals(result, expected);
+
+        Method m = TestInline.class.getDeclaredMethod("callerRepeatedCallee");
+        Asserts.assertTrue(wb.isMethodCompiled(m));
+    }
+
+    // -------------------------------------------------------
+    // 9. Explicitly disabled inline.
+    // -------------------------------------------------------
+    public static int helperDontInline(int x) {
+        return x * 17 + 3;
+    }
+
+    public static int callerDontInline() {
+        int sum = 0;
+        for (int i = 0; i < 100_000; i++) {
+            sum += helperDontInline(i);
+        }
+        return sum;
+    }
+
+    static void testDontInline() throws Exception {
+        int result = callerDontInline();
+        int expected = 0;
+        for (int i = 0; i < 100_000; i++) {
+            expected += i * 17 + 3;
+        }
+        Asserts.assertEquals(result, expected);
+
+        Method m = TestInline.class.getDeclaredMethod("callerDontInline");
+        Asserts.assertTrue(wb.isMethodCompiled(m));
+    }
 }

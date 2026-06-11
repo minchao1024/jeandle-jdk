@@ -296,25 +296,24 @@ class JeandleAbstractInterpreter : public StackObj {
   // Cumulative traps
   uint* _trap_hist;
 
-  // Reuse stack allocation for monitor: each monitor nesting level maps to a
-  // fixed BasicLock slot on the stack. When the same nesting level is entered
-  // again, the existing slot is reused rather than allocating a new one, so
-  // that phi nodes and deopt info can consistently reference the same stack
-  // location for a given monitor depth.
-  llvm::SmallVector<llvm::Value*> _allocated_basic_lock;
+  // Reuse BasicLock stack slots within the current LLVM function: each monitor
+  // nesting level maps to a fixed slot. Inline currently cannot reuse BasicLock
+  // slots across caller/callee functions because the slot is a function-local
+  // alloca. A later LLVM pass should hoist or merge these slots after inlining.
+  llvm::SmallVector<llvm::Value*> _basic_lock_slots;
 
-  bool need_alloc_for(int monitor_nest_level) {
-    return (int)_allocated_basic_lock.size() <= monitor_nest_level;
+  bool needs_basic_lock_slot(int monitor_nest_level) {
+    return (int)_basic_lock_slots.size() <= monitor_nest_level;
   };
 
-  void push_allocated_basic_lock(llvm::Value* basic_lock) {
+  void add_basic_lock_slot(llvm::Value* basic_lock) {
     assert(basic_lock != nullptr, "basic_lock should not be nullptr");
-    return _allocated_basic_lock.push_back(basic_lock);
+    return _basic_lock_slots.push_back(basic_lock);
   };
 
-  llvm::Value* allocated_basic_lock_at(int index) {
-    assert(index >= 0 && index < (int)_allocated_basic_lock.size(), "index out of bound");
-    return _allocated_basic_lock[index];
+  llvm::Value* basic_lock_slot_at(int index) {
+    assert(index >= 0 && index < (int)_basic_lock_slots.size(), "index out of bound");
+    return _basic_lock_slots[index];
   };
 
   bool is_osr() { return _entry_bci != InvocationEntryBci; }

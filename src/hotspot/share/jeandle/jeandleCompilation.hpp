@@ -23,7 +23,6 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/StringMap.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
@@ -43,6 +42,7 @@
 
 class ciCallProfile;
 class ciObject;
+class DirectiveSet;
 class JeandleCompilation;
 class outputStream;
 
@@ -64,6 +64,7 @@ class JeandleInlineTree : public AnyObj {
                      ciMethod* callee,
                      ciMethod* caller,
                      int caller_bci,
+                     bool& forced_inline,
                      ciCallProfile& profile);
   bool should_not_inline(JeandleCompilation* comp,
                          ciMethod* callee,
@@ -74,6 +75,9 @@ class JeandleInlineTree : public AnyObj {
                       ciMethod* caller,
                       int caller_bci,
                       ciCallProfile& profile);
+  void print_impl(outputStream* out,
+                  const std::string& prefix,
+                  bool is_last) const;
   bool try_to_inline(JeandleCompilation* comp,
                      ciMethod* callee,
                      ciMethod* caller,
@@ -103,6 +107,7 @@ class JeandleInlineTree : public AnyObj {
                                                   int caller_bci,
                                                   Arena* arena);
   int count() const;
+  void print(outputStream* out) const;
   void dump_replay_data(outputStream* out, int depth_adjust = 0) const;
 };
 
@@ -115,6 +120,7 @@ class JeandleCompilation : public StackObj {
                      ciMethod* method,
                      int entry_bci,
                      bool install_code,
+                     DirectiveSet* directive,
                      llvm::MemoryBuffer* template_buffer);
 
   // Compile a runtime stub that call a JeandleRuntimeRoutine.
@@ -155,9 +161,7 @@ class JeandleCompilation : public StackObj {
 
   ciMethod* method() { return _method; }
 
-  void add_method_for_llvm_name(const char* name, ciMethod* method) { _method_for_llvm_name[name] = method; }
-  ciMethod* method_for_llvm_name(const char* name) const { return _method_for_llvm_name.lookup(name); }
-  void note_root_method_for_llvm_name(const char* name);
+  void initialize_inline_tree();
 
   JeandleInlineTree* inline_tree_root() const { return _inline_tree_root; }
   JeandleInlineTree* inline_tree_for_scope(int scope_id) const;
@@ -175,9 +179,11 @@ class JeandleCompilation : public StackObj {
 
   bool is_osr_compilation() { return _entry_bci != InvocationEntryBci; }
   bool over_inlining_cutoff() const;
+  void* replay_inline_data() const { return _replay_inline_data; }
 
   void dump_inline_data(outputStream* out);
   void dump_inline_data_reduced(outputStream* out);
+  void dump_inline_callee_replay_module();
 
  private:
   Arena* _arena; // Hold compilation life-time objects (JeandleCompilationResourceObj).
@@ -191,8 +197,8 @@ class JeandleCompilation : public StackObj {
   std::unique_ptr<llvm::Module> _llvm_module;
   std::string _comp_start_time;
   uint _trap_hist[MethodData::_trap_hist_limit];
+  void* _replay_inline_data;
 
-  llvm::StringMap<ciMethod*> _method_for_llvm_name;
   // LLVM uses -1 for the root Java method scope. Non-negative scope ids are
   // assigned in successful inline order and index this array.
   GrowableArray<JeandleInlineTree*> _inline_trees;
