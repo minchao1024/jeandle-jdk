@@ -2031,6 +2031,7 @@ llvm::CallInst* JeandleAbstractInterpreter::create_call(llvm::FunctionCallee cal
     llvm::ConstantInt* addr_value = llvm::dyn_cast<llvm::ConstantInt>(
       llvm::ConstantFoldCastOperand(llvm::Instruction::PtrToInt, callee_constant, llvm::Type::getInt64Ty(*_context), _module.getDataLayout()));
     if (addr_value != nullptr && JeandleRuntimeRoutine::is_gc_leaf((address)addr_value->getZExtValue())) {
+      call->addFnAttr(llvm::Attribute::NoUnwind);
       call->addFnAttr(llvm::Attribute::get(call->getContext(), "gc-leaf-function"));
     }
   }
