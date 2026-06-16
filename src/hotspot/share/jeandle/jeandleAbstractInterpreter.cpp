@@ -21,6 +21,7 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
@@ -1461,12 +1462,47 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
   }
 
   llvm::Value* request = _ir_builder.getInt32(Deoptimization::make_trap_request(reason, action));
-  llvm::FunctionCallee callee = JeandleRuntimeRoutine::uncommon_trap_callee(_module);
-  llvm::CallInst* call = create_call(callee, {request}, llvm::CallingConv::Hotspot_JIT, {create_current_deopt_bundle()});
-  call->setDoesNotReturn();
 
-  // mark unreachable
-  _ir_builder.CreateUnreachable();
+  // Pre-declare the runtime symbol RewriteStatepointsForGC will use when it
+  // lowers llvm.experimental.deoptimize.  It must keep the Hotspot_JIT calling
+  // convention because the target is still the uncommon-trap blob entry.
+  llvm::GlobalValue* existing_deopt_target = _module.getNamedValue("__llvm_deoptimize");
+  assert(existing_deopt_target == nullptr || llvm::isa<llvm::Function>(existing_deopt_target),
+         "__llvm_deoptimize must be a function declaration");
+  llvm::FunctionType* deopt_target_ty =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(*_context),
+                              {llvm::Type::getInt32Ty(*_context)},
+                              /*isVarArg=*/false);
+  llvm::Function* deopt_target = llvm::dyn_cast_or_null<llvm::Function>(existing_deopt_target);
+  if (deopt_target == nullptr) {
+    deopt_target = llvm::Function::Create(deopt_target_ty,
+                                          llvm::Function::ExternalLinkage,
+                                          "__llvm_deoptimize",
+                                          &_module);
+  }
+  assert(deopt_target->getFunctionType() == deopt_target_ty,
+         "__llvm_deoptimize must have void(i32) signature");
+  deopt_target->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  // Model uncommon traps as an LLVM deoptimization continuation.  This tells
+  // optimizers that the deopt path can produce the current Java method's return
+  // value, instead of treating the trap block as unreachable and folding
+  // deopt-only locals through that assumption.
+  llvm::Type* ret_type = _llvm_func->getReturnType();
+  llvm::Function* deopt_decl = llvm::Intrinsic::getOrInsertDeclaration(
+      &_module, llvm::Intrinsic::experimental_deoptimize, {ret_type});
+  deopt_decl->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  llvm::CallInst* call = _ir_builder.CreateCall(
+      deopt_decl, {request}, {create_current_deopt_bundle()});
+  call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  // LangRef requires llvm.experimental.deoptimize to be in tail position and
+  // immediately followed by a return of its result.
+  if (ret_type->isVoidTy()) {
+    _ir_builder.CreateRetVoid();
+  } else {
+    _ir_builder.CreateRet(call);
+  }
 
   if (insert_block != nullptr) {
     // Recover insert point.
