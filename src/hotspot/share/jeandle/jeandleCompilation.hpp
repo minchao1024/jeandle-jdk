@@ -132,7 +132,7 @@ class JeandleCompilation : public StackObj {
                      address routine_address,
                      llvm::FunctionType* func_type);
 
-  ~JeandleCompilation() = default;
+  ~JeandleCompilation();
 
   static JeandleCompilation* current() { return (JeandleCompilation*) ciEnv::current()->compiler_data(); }
 

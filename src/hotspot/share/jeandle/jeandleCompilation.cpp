@@ -301,6 +301,10 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   _code.set_routine_entry(rs->entry_point());
 }
 
+JeandleCompilation::~JeandleCompilation() {
+  _env->set_compiler_data(nullptr);
+}
+
 const char* JeandleCompilation::check_can_parse(ciMethod* method) {
   // Certain method cannot be parsed at all:
   if ( method->is_native())                   return "native method";

@@ -45,6 +45,7 @@ public class TestScopeValues {
                 "-XX:JeandleDumpDirectory=" + dump_path,
                 "-XX:+PrintNMethods",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::test_invoke",
+                "-XX:CompileCommand=dontinline," + TestWrapper.class.getName() + "::empty",
                 TestWrapper.class.getName()));
 
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
