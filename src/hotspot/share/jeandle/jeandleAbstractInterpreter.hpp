@@ -314,9 +314,6 @@ class JeandleAbstractInterpreter : public StackObj {
   // is declared in that intrinsic's trap-throttle mask (see kTrapThrottleTable).
   DEBUG_ONLY(vmIntrinsics::ID _lowering_intrinsic_id = vmIntrinsics::_none;)
 
-  // Record oop values.
-  llvm::DenseMap<jobject, llvm::Value*> _oops;
-
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
   JeandleVMState* _jvm;
@@ -419,7 +416,6 @@ class JeandleAbstractInterpreter : public StackObj {
 
   llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
 
-  llvm::Value* find_or_insert_oop(ciObject* oop);
   TypedValue constant_to_value(ciConstant con);
 
   // Implementation of _get* and _put* bytecodes.
