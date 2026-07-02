@@ -1505,6 +1505,7 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
   llvm::Type* ret_type = _llvm_func->getReturnType();
   llvm::Function* deopt_decl = llvm::Intrinsic::getOrInsertDeclaration(
       &_module, llvm::Intrinsic::experimental_deoptimize, {ret_type});
+  deopt_decl->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   llvm::CallInst* call = _ir_builder.CreateCall(
       deopt_decl, {request}, {create_current_deopt_bundle()});
   call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
