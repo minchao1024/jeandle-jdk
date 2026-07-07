@@ -369,9 +369,6 @@ JeandleInlineTree::JeandleInlineTree(JeandleInlineTree* caller_tree,
                                      _max_inline_level(max_inline_level),
                                      _count_inline_bcs(method == nullptr ? 0 : method->code_size_for_inlining()),
                                      _subtrees(arena, 2, 0, nullptr) {
-  for (JeandleInlineTree* caller = caller_tree; caller != nullptr; caller = caller->caller_tree()) {
-    caller->_count_inline_bcs += _count_inline_bcs;
-  }
 }
 
 static methodHandle jeandle_method_handle(ciMethod* method) {
@@ -824,13 +821,10 @@ JeandleInlineTree* JeandleInlineTree::callee_at(int caller_bci, ciMethod* callee
   return nullptr;
 }
 
-JeandleInlineTree* JeandleInlineTree::build_inline_tree_for_callee(ciMethod* callee,
-                                                                   int caller_bci,
-                                                                   Arena* arena) {
-  JeandleInlineTree* old_tree = callee_at(caller_bci, callee);
-  if (old_tree != nullptr) {
-    return old_tree;
-  }
+JeandleInlineTree* JeandleInlineTree::allocate_inline_tree_for_callee(ciMethod* callee,
+                                                                      int caller_bci,
+                                                                      Arena* arena) {
+  // Allocate before LLVM mutates IR, but do not append the node until the inline succeeds.
   int max_inline_level_adjust = 0;
   if (method() != nullptr) {
     if (method()->is_compiled_lambda_form()) {
@@ -840,12 +834,22 @@ JeandleInlineTree* JeandleInlineTree::build_inline_tree_for_callee(ciMethod* cal
       max_inline_level_adjust += 1; // Do not count method handle calls from java.lang.invoke implementation.
     }
   }
-  JeandleInlineTree* callee_tree =
-      new (arena) JeandleInlineTree(this, callee, caller_bci,
-                                    max_inline_level() + max_inline_level_adjust,
-                                    arena);
+  return new (arena) JeandleInlineTree(this, callee, caller_bci,
+                                       max_inline_level() + max_inline_level_adjust,
+                                       arena);
+}
+
+void JeandleInlineTree::commit_inline_tree_for_callee(JeandleInlineTree* callee_tree) {
+  assert(callee_tree != nullptr, "callee inline tree must exist");
+  assert(callee_tree->caller_tree() == this, "callee inline tree must belong to this caller");
+  assert(callee_at(callee_tree->caller_bci(), callee_tree->method()) == nullptr,
+         "callee inline tree must not be committed twice");
+  // From this point on, the tree reflects a successful LLVM inline and can
+  // contribute to replay data, inline scope lookup, and bytecode-size limits.
   _subtrees.append(callee_tree);
-  return callee_tree;
+  for (JeandleInlineTree* caller = this; caller != nullptr; caller = caller->caller_tree()) {
+    caller->_count_inline_bcs += callee_tree->count_inline_bcs();
+  }
 }
 
 int JeandleInlineTree::count() const {
@@ -907,18 +911,59 @@ JeandleInlineTree* JeandleCompilation::inline_tree_for_scope(int scope_id) const
   return _inline_trees.at(scope_id);
 }
 
-JeandleInlineTree* JeandleCompilation::build_inline_tree_for_callee(int caller_scope_id,
-                                                                    int caller_bci,
-                                                                    ciMethod* callee) {
+JeandleInlineTree* JeandleCompilation::prepare_inline_tree_for_callee(int caller_scope_id,
+                                                                      int caller_bci,
+                                                                      ciMethod* callee) {
   JeandleInlineTree* caller_tree = inline_tree_for_scope(caller_scope_id);
   assert(caller_tree != nullptr, "caller inline tree must exist");
-  JeandleInlineTree* callee_tree =
-      caller_tree->build_inline_tree_for_callee(callee, caller_bci, _arena);
+
+  JeandleInlineTree* committed_tree = caller_tree->callee_at(caller_bci, callee);
+  if (committed_tree != nullptr) {
+    return committed_tree;
+  }
+  for (int i = 0; i < _pending_inline_trees.length(); i++) {
+    JeandlePendingInlineTree* pending = _pending_inline_trees.at(i);
+    if (pending->matches(caller_scope_id, caller_bci, callee)) {
+      return pending->_callee_tree;
+    }
+  }
+
+  JeandleInlineTree* callee_tree = caller_tree->allocate_inline_tree_for_callee(callee, caller_bci, _arena);
+  _pending_inline_trees.append(new (_arena) JeandlePendingInlineTree(caller_scope_id,
+                                                                     caller_bci,
+                                                                     callee,
+                                                                     callee_tree));
+  return callee_tree;
+}
+
+void JeandleCompilation::commit_inline_tree_for_callee(int caller_scope_id,
+                                                       int caller_bci,
+                                                       ciMethod* callee) {
+  JeandleInlineTree* caller_tree = inline_tree_for_scope(caller_scope_id);
+  assert(caller_tree != nullptr, "caller inline tree must exist");
+
+  JeandleInlineTree* committed_tree = caller_tree->callee_at(caller_bci, callee);
+  if (committed_tree != nullptr) {
+    _inline_trees.append(committed_tree);
+    return;
+  }
+
+  JeandleInlineTree* callee_tree = nullptr;
+  for (int i = 0; i < _pending_inline_trees.length(); i++) {
+    JeandlePendingInlineTree* pending = _pending_inline_trees.at(i);
+    if (pending->matches(caller_scope_id, caller_bci, callee)) {
+      callee_tree = pending->_callee_tree;
+      _pending_inline_trees.remove_at(i);
+      break;
+    }
+  }
+  assert(callee_tree != nullptr, "callee inline tree must have been prepared before a successful inline");
+
+  caller_tree->commit_inline_tree_for_callee(callee_tree);
   // Keep this array in lockstep with LLVM's InlineScopes vector. LLVM assigns
   // the new scope id after RecordInlineSuccess using the same successful-inline
   // order, so appending here produces the id that cloned child call sites use.
   _inline_trees.append(callee_tree);
-  return callee_tree;
 }
 
 void JeandleCompilation::dump_inline_data(outputStream* out) {

@@ -44,7 +44,31 @@ class ciCallProfile;
 class ciObject;
 class DirectiveSet;
 class JeandleCompilation;
+class JeandleInlineTree;
 class outputStream;
+
+class JeandlePendingInlineTree : public AnyObj {
+ public:
+  int _caller_scope_id;
+  int _caller_bci;
+  ciMethod* _callee;
+  JeandleInlineTree* _callee_tree;
+
+  JeandlePendingInlineTree(int caller_scope_id,
+                           int caller_bci,
+                           ciMethod* callee,
+                           JeandleInlineTree* callee_tree) :
+                           _caller_scope_id(caller_scope_id),
+                           _caller_bci(caller_bci),
+                           _callee(callee),
+                           _callee_tree(callee_tree) {}
+
+  bool matches(int caller_scope_id, int caller_bci, ciMethod* callee) const {
+    return _caller_scope_id == caller_scope_id &&
+           _caller_bci == caller_bci &&
+           _callee == callee;
+  }
+};
 
 class JeandleInlineTree : public AnyObj {
   JeandleInlineTree* _caller_tree;
@@ -103,9 +127,15 @@ class JeandleInlineTree : public AnyObj {
                     ciMethod* callee,
                     int caller_bci);
   JeandleInlineTree* callee_at(int caller_bci, ciMethod* callee) const;
-  JeandleInlineTree* build_inline_tree_for_callee(ciMethod* callee,
-                                                  int caller_bci,
-                                                  Arena* arena);
+  // Inline tree allocation is separated from commit so allocation happens before
+  // LLVM mutates IR. If the tree were allocated only after a successful LLVM
+  // inline, an allocation failure could leave LLVM IR inlined while JVM inline
+  // metadata is missing. Commit is still delayed until RecordInlineSuccess so
+  // failed LLVM inline attempts are not recorded.
+  JeandleInlineTree* allocate_inline_tree_for_callee(ciMethod* callee,
+                                                     int caller_bci,
+                                                     Arena* arena);
+  void commit_inline_tree_for_callee(JeandleInlineTree* callee_tree);
   int count() const;
   void print(outputStream* out) const;
   void dump_replay_data(outputStream* out, int depth_adjust = 0) const;
@@ -165,9 +195,12 @@ class JeandleCompilation : public StackObj {
 
   JeandleInlineTree* inline_tree_root() const { return _inline_tree_root; }
   JeandleInlineTree* inline_tree_for_scope(int scope_id) const;
-  JeandleInlineTree* build_inline_tree_for_callee(int caller_scope_id,
-                                                  int caller_bci,
-                                                  ciMethod* callee);
+  JeandleInlineTree* prepare_inline_tree_for_callee(int caller_scope_id,
+                                                    int caller_bci,
+                                                    ciMethod* callee);
+  void commit_inline_tree_for_callee(int caller_scope_id,
+                                     int caller_bci,
+                                     ciMethod* callee);
 
   JeandleCompiledCode* compiled_code() { return &_code; }
 
@@ -202,6 +235,7 @@ class JeandleCompilation : public StackObj {
   // LLVM uses -1 for the root Java method scope. Non-negative scope ids are
   // assigned in successful inline order and index this array.
   GrowableArray<JeandleInlineTree*> _inline_trees;
+  GrowableArray<JeandlePendingInlineTree*> _pending_inline_trees;
   JeandleInlineTree* _inline_tree_root;
 
   // Record oop constants as module-level globals. This is shared by all

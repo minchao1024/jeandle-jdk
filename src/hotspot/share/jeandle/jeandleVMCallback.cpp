@@ -244,7 +244,13 @@ bool jeandle_is_ok_to_inline(int scope_id, int bci, uintptr_t callee_method) {
   if (caller_tree->callee_at(bci, callee) != nullptr) {
     return true;
   }
-  return caller_tree->ok_to_inline(comp, callee, bci);
+  if (!caller_tree->ok_to_inline(comp, callee, bci)) {
+    return false;
+  }
+
+  JeandleInlineTree* callee_tree = comp->prepare_inline_tree_for_callee(scope_id, bci, callee);
+  assert(callee_tree != nullptr, "callee inline tree must be prepared before LLVM inline");
+  return true;
 }
 
 bool jeandle_record_inline_success(int scope_id, int bci, uintptr_t callee_method) {
@@ -253,14 +259,9 @@ bool jeandle_record_inline_success(int scope_id, int bci, uintptr_t callee_metho
   ciMethod* callee = jeandle_callback_method(callee_method);
 
   // LLVM calls this callback only after the inline transformation succeeds.
-  // Keep Jeandle's inline tree in sync at that point so later policy checks
-  // account for the bytecodes that were actually inlined.
-  JeandleInlineTree* callee_tree = comp->build_inline_tree_for_callee(scope_id, bci, callee);
-  // TODO: Allocate the callee inline tree before asking LLVM to inline. Today
-  // this callback is reached after LLVM has already changed IR, so failing to
-  // build the tree here would leave frontend inline metadata out of sync with
-  // backend IR.
-  guarantee(callee_tree != nullptr, "callee inline tree must be recorded after a successful inline");
+  // IsOkToInline has already prepared this tree, so this operation should only
+  // commit metadata in the same successful-inline order as LLVM's InlineScopes.
+  comp->commit_inline_tree_for_callee(scope_id, bci, callee);
   return true;
 }
 
