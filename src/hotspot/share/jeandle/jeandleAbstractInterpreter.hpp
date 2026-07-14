@@ -152,7 +152,8 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder,
                                              MethodLivenessResult liveness,
                                              const JeandleParseContext& parse_context,
-                                             int bci);
+                                             int bci,
+                                             bool should_reexecute = false);
 
   int interpreter_frame_size_in_bytes();
  private:
@@ -409,7 +410,7 @@ class JeandleAbstractInterpreter : public StackObj {
                                    llvm::CallingConv::ID calling_conv,
                                    llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
 
-  llvm::OperandBundleDef create_current_deopt_bundle();
+  llvm::OperandBundleDef create_current_deopt_bundle(bool should_reexecute = false);
 
   void add_safepoint_poll();
   void add_return_safepoint_poll();
@@ -442,7 +443,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_array_load(BasicType basic_type);
   void do_array_store(BasicType basic_type);
   llvm::Value* do_array_load_inner(BasicType basic_type, llvm::Type* load_type);
-  void do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value);
+  llvm::Value* do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value);
   void array_store_check(llvm::Value* value, llvm::Value* array_ref);
   llvm::Value* compute_array_element_address(BasicType basic_type, llvm::Type* type);
 
@@ -490,7 +491,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void boundary_check(llvm::Value* array_oop, llvm::Value* index);
 
-  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr);
+  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr, bool should_reexecute = false);
 
   void return_current(llvm::Value* value);
 
