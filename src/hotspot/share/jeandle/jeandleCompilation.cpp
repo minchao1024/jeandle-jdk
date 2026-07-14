@@ -682,7 +682,7 @@ bool JeandleInlineTree::should_inline(JeandleCompilation* comp,
     return false;
   }
   reason = JeandleInlineReason::InlineHot;
-  return size <= max_inline_size;
+  return true;
 }
 
 bool JeandleInlineTree::should_not_inline(JeandleCompilation* comp,
