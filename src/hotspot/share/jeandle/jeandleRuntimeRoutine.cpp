@@ -209,7 +209,7 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array_from_mirror(oopDesc* mirr
 JRT_END
 
 // It's a copy of OptoRuntime::new_instance_C
-JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(InstanceKlass* klass, JavaThread* current))
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(Klass* klass, JavaThread* current))
   JRT_BLOCK;
 #ifndef PRODUCT
     SharedRuntime::_new_instance_ctr++;         // new instance requires GC

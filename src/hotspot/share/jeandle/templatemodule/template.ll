@@ -73,6 +73,10 @@
 ; Byte offsets for java.lang.ref.Reference instance fields.
 @java_lang_ref_Reference.referent_offset = external global i32
 
+; Byte offset of the Klass metadata pointer in java.lang.Class (injected field).
+; The field is null for primitive mirrors, including void.class.
+@java_lang_Class.klass_offset = external global i32
+
 ; Byte offset of the cached array klass in java.lang.Class (injected field).
 ; Stores the array Klass* for this component type once the array type has been loaded.
 ; Zero/null means the array klass has not yet been resolved.
@@ -156,6 +160,15 @@ compressed:
 uncompressed:
   %wide = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
   ret ptr addrspace(0) %wide
+}
+
+; Load the nullable Klass* stored in a java.lang.Class mirror.  A null result
+; denotes a primitive type (including void), not a null mirror.
+define hotspotcc ptr addrspace(0) @jeandle.load_klass_from_mirror(ptr addrspace(1) nocapture nonnull %mirror) noinline "lower-phase"="1" #0 {
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load ptr addrspace(0), ptr addrspace(1) %klass_addr
+  ret ptr addrspace(0) %klass
 }
 
 ; This is the slow path for subtype checking when the fast path fails.
@@ -269,8 +282,13 @@ declare hotspotcc ptr addrspace(1) @new_instance(ptr, ptr)
 
 ; Implementation of Java new object
 ; TODO: Support prefetch instructions for next allocations.
-define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
+define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes, i1 %initial_slow_test) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
 entry:
+  ; The caller may already know that this allocation requires the runtime.
+  ; Share that path with a TLAB exhaustion instead of creating another call.
+  br i1 %initial_slow_test, label %alloc_slow_path, label %check_tlab
+
+check_tlab:
   %use_tlab = load i1, ptr @VMOptions.UseTLAB
   br i1 %use_tlab, label %test_tlab, label %alloc_slow_path
 
