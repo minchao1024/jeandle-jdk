@@ -184,7 +184,6 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_vectorized_mismatch();
-  llvm::CallBase* emit_load_klass_from_mirror(llvm::Value* mirror);
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
                                               llvm::Value* byte_length,

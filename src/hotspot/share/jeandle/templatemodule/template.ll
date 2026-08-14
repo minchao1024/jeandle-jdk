@@ -95,10 +95,6 @@
 ; Byte offsets for java.lang.ref.Reference instance fields.
 @java_lang_ref_Reference.referent_offset = external global i32
 
-; Byte offset of the Klass metadata pointer in java.lang.Class (injected field).
-; The field is null for primitive mirrors, including void.class.
-@java_lang_Class.klass_offset = external global i32
-
 ; Byte offset of the cached array klass in java.lang.Class (injected field).
 ; Stores the array Klass* for this component type once the array type has been loaded.
 ; Zero/null means the array klass has not yet been resolved.
@@ -197,15 +193,6 @@ compressed:
 uncompressed:
   %wide = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
   ret ptr addrspace(0) %wide
-}
-
-; Load the nullable Klass* stored in a java.lang.Class mirror.  A null result
-; denotes a primitive type (including void), not a null mirror.
-define hotspotcc ptr addrspace(0) @jeandle.load_klass_from_mirror(ptr addrspace(1) nocapture nonnull %mirror) noinline "lower-phase"="1" #0 {
-  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
-  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
-  %klass = load ptr addrspace(0), ptr addrspace(1) %klass_addr
-  ret ptr addrspace(0) %klass
 }
 
 ; This is the slow path for subtype checking when the fast path fails.

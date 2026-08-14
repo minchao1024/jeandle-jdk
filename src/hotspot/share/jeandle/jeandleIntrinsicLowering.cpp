@@ -33,6 +33,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
+#include "classfile/javaClasses.hpp"
 #include "classfile/vmIntrinsics.hpp"
 #include "jeandle/jeandle_globals.hpp"
 #include "logging/log.hpp"
@@ -888,17 +889,6 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   return true;
 }
 
-llvm::CallBase* JeandleIntrinsicLowering::emit_load_klass_from_mirror(llvm::Value* mirror) {
-  llvm::Function* load_klass =
-      _interp->_module.getFunction("jeandle.load_klass_from_mirror");
-  assert(load_klass != nullptr, "load_klass_from_mirror JavaOp must exist");
-
-  static constexpr CallSiteAttributeMetadata load_attrs =
-      {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE};
-  return emit_callsite(load_klass, llvm::CallingConv::Hotspot_JIT,
-                       {mirror}, load_attrs);
-}
-
 bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
@@ -924,7 +914,11 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
 
   // TODO: Fold constant mirrors, their Klass, and the dependent layout and
   // initialization loads together in an LLVM pass.
-  llvm::Value* klass = emit_load_klass_from_mirror(mirror);
+  llvm::Value* klass_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), mirror,
+      builder.getInt32(java_lang_Class::klass_offset()));
+  llvm::Value* klass = builder.CreateLoad(
+      c_heap_ptr_ty, klass_addr, "unsafe_allocate.klass");
   llvm::Value* klass_is_null = builder.CreateICmpEQ(
       klass, llvm::ConstantPointerNull::get(c_heap_ptr_ty));
   builder.CreateCondBr(klass_is_null, primitive_trap_bb, allocation_check_bb);

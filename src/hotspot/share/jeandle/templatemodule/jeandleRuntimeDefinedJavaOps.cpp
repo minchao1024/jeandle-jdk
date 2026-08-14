@@ -612,7 +612,6 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("oopDesc.klass_offset_in_bytes",                    int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
   define_global("oopDesc.mark_offset_in_bytes",                     int32_type, static_cast<uint64_t>(oopDesc::mark_offset_in_bytes()));
   define_global("java_lang_ref_Reference.referent_offset",          int32_type, static_cast<uint64_t>(java_lang_ref_Reference::referent_offset()));
-  define_global("java_lang_Class.klass_offset",                     int32_type, static_cast<uint64_t>(java_lang_Class::klass_offset()));
   define_global("java_lang_Class.array_klass_offset",               int32_type, static_cast<uint64_t>(java_lang_Class::array_klass_offset()));
   define_global("BasicLock.displaced_header_offset_in_bytes",       int32_type, static_cast<uint64_t>(BasicLock::displaced_header_offset_in_bytes()));
   define_global("JavaThread.held_monitor_count_offset",             int32_type, static_cast<uint64_t>(JavaThread::held_monitor_count_offset()));
