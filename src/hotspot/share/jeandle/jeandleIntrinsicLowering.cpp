@@ -892,7 +892,7 @@ bool JeandleIntrinsicLowering::lower_new_array() {
 bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  llvm::Module& module = _interp->_module;
+  llvm::Module& m = _interp->_module;
 
   // Keep the invoke operands in the JVM state until every throwing or
   // safepointing call has captured its deopt bundle.
