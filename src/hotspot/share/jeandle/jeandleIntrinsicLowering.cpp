@@ -959,7 +959,7 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
   llvm::Value* size_in_bytes = builder.CreateAnd(
       layout, builder.getInt32(~(jint)right_n_bits(LogBytesPerLong)),
       "unsafe_allocate.size_in_bytes");
-  llvm::Function* new_instance_op = module.getFunction("jeandle.new_instance");
+  llvm::Function* new_instance_op = m.getFunction("jeandle.new_instance");
   assert(new_instance_op != nullptr, "jeandle.new_instance JavaOp must exist");
   // All reexecuting checks have completed. The allocation slow path must use
   // the post-invoke state, so do not keep the Unsafe receiver or Class mirror
