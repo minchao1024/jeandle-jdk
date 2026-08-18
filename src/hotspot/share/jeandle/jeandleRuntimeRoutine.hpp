@@ -403,7 +403,7 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static address search_landingpad(JavaThread* current);
 
-  // Array allocation routine
+  // Allocation routine
   static void new_instance(Klass* klass, JavaThread* current);
   static void new_array(Klass* array_type, int length, JavaThread* current);
   // Slow-path array allocation: resolves the array klass from the component-type mirror
