@@ -223,7 +223,11 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(Klass* klass, JavaThre
 
     // These checks are cheap to make and support reflective allocation.
     int lh = klass->layout_helper();
-    if (Klass::layout_helper_needs_slow_path(lh) || !InstanceKlass::cast(klass)->is_initialized()) {
+    // This entry can receive an ArrayKlass, so do not assume that the Klass is
+    // an InstanceKlass before querying instance-only fields or casting it.
+    if (!Klass::layout_helper_is_instance(lh) ||
+        Klass::layout_helper_needs_slow_path(lh) ||
+        !InstanceKlass::cast(klass)->is_initialized()) {
       Handle holder(current, klass->klass_holder()); // keep the klass alive
       klass->check_valid_for_instantiation(false, THREAD);
       if (!HAS_PENDING_EXCEPTION) {
