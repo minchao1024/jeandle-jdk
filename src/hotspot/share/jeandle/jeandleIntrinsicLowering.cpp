@@ -54,6 +54,7 @@
 #include "runtime/vm_version.hpp"
 #include "utilities/globalDefinitions.hpp"
 
+#include <cstddef>
 #include <cstring>
 
 // =============================================================================
@@ -70,7 +71,8 @@ void annotate_call(llvm::CallBase* call,
 }
 
 void apply_memory_attr(llvm::CallBase* call, const CallSiteAttributeMetadata& attrs) {
-  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge()) {
+  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge() ||
+      attrs.observes_external_state()) {
     return;
   }
   const bool reads = attrs.reads_memory();
@@ -177,6 +179,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // getClass
     case vmIntrinsics::_getClass:
+
+    // System time queries
+    case vmIntrinsics::_currentTimeMillis:
+    case vmIntrinsics::_nanoTime:
 
     // currentThread
     case vmIntrinsics::_currentThread:
@@ -288,6 +294,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // hash code
     case vmIntrinsics::_hashCode:
     case vmIntrinsics::_identityHashCode:
+
+    // arrayequals
+    case vmIntrinsics::_equalsB:
+    case vmIntrinsics::_equalsC:
       return true;
 
     // Single-block SHA compression. Availability is checked again by the
@@ -296,6 +306,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
+
+    // StringUTF16 trusted single-code-unit access
+    case vmIntrinsics::_getCharStringU:
+    case vmIntrinsics::_putCharStringU:
       return true;
 
     default:
@@ -449,6 +463,13 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ});
 
+    case vmIntrinsics::_currentTimeMillis:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeMillis_callee(_interp->_module));
+    case vmIntrinsics::_nanoTime:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeNanos_callee(_interp->_module));
+
     // Thread.currentThread()
     case vmIntrinsics::_currentThread:
       return lower_java_op("jeandle.current_thread_obj",
@@ -564,6 +585,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_arraycopy:
       return lower_arraycopy();
 
+    // arraycopy
+    case vmIntrinsics::_equalsB:
+      return lower_arrayequals(T_BYTE);
+    case vmIntrinsics::_equalsC:
+      return lower_arrayequals(T_CHAR);
+
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
@@ -574,6 +601,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_hashCode:
       return lower_hash_code(id);
 
+    // StringUTF16 trusted single-code-unit access.
+    case vmIntrinsics::_getCharStringU:
+      return lower_string_char_access(/*is_store=*/false);
+    case vmIntrinsics::_putCharStringU:
+      return lower_string_char_access(/*is_store=*/true);
+
     default:
       return false;
   }
@@ -582,6 +615,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 // =============================================================================
 // Shared emit helpers
 // =============================================================================
+
+bool JeandleIntrinsicLowering::lower_native_time_func(llvm::FunctionCallee callee) {
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_OBSERVES_EXTERNAL_STATE};
+  llvm::CallBase* result = emit_callsite(
+      callee, llvm::CallingConv::C, {}, attrs, /*is_gc_leaf_entry=*/true);
+  _interp->_jvm->lpush(result);
+  return true;
+}
 
 llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee callee,
                                                         llvm::CallingConv::ID cc,
@@ -2310,5 +2352,134 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
     arraycopy_call->addFnAttr(llvm::Attribute::get(
         ctx, llvm::jeandle::Attribute::ArrayCopyNegativeLengthGuard));
   }
+  return true;
+}
+
+// StringUTF16 trusted single-code-unit access. Its byte[] backing stores
+// UTF-16 code units in native-endian order, matching the target data layout.
+// Keep the element access as i16 so LLVM can fold the two-byte element scale
+// into the target load/store addressing mode (for example, AArch64's
+// ldrh/strh [base, index, sxtw #1]).
+bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8 = b.getInt8Ty();
+  llvm::Type* i16 = b.getInt16Ty();
+
+  llvm::Value* array = _interp->_jvm->peek_value(is_store ? 2 : 1).value();
+  llvm::Value* index = _interp->_jvm->peek_value(is_store ? 1 : 0).value();
+
+  assert(arrayOopDesc::base_offset_in_bytes(T_CHAR) == arrayOopDesc::base_offset_in_bytes(T_BYTE),
+         "byte[] and char[] bases must agree");
+  assert(type2aelembytes(T_CHAR) == type2aelembytes(T_BYTE) * 2,
+         "char[] scale must be twice byte[] scale");
+
+  _interp->null_check(array);
+
+  llvm::Value* data = b.CreateInBoundsGEP(
+      i8, array, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
+      is_store ? "string_putchar_data" : "string_getchar_data");
+  llvm::Value* addr = b.CreateInBoundsGEP(
+      i16, data, index,
+      is_store ? "string_putchar_addr" : "string_getchar_addr");
+
+  if (is_store) {
+    llvm::Value* ch = _interp->_jvm->peek_value(0).value();
+    llvm::Value* ch16 = b.CreateTrunc(ch, i16, "string_putchar_value");
+    llvm::StoreInst* store = b.CreateStore(ch16, addr);
+    store->setAlignment(llvm::Align(2));
+    store->setAtomic(llvm::AtomicOrdering::Unordered);
+
+    _interp->_jvm->ipop(); // c
+    _interp->_jvm->ipop(); // index
+    _interp->_jvm->apop(); // value
+  } else {
+    llvm::LoadInst* loaded = b.CreateLoad(i16, addr, "string_getchar_result");
+    loaded->setAlignment(llvm::Align(2));
+    loaded->setAtomic(llvm::AtomicOrdering::Unordered);
+    llvm::Value* result = b.CreateZExt(
+        loaded, b.getInt32Ty(), "string_getchar_result_i32");
+
+    _interp->_jvm->ipop(); // index
+    _interp->_jvm->apop(); // value
+    _interp->_jvm->ipush(result);
+  }
+  return true;
+}
+
+// ---- lower_arrayequals ----
+bool JeandleIntrinsicLowering::lower_arrayequals(BasicType element_type) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+
+  llvm::Value* left = _interp->_jvm->peek_value(1).value();
+  llvm::Value* right = _interp->_jvm->peek_value(0).value();
+
+  llvm::BasicBlock* current_bb = b.GetInsertBlock();
+  llvm::BasicBlock* null_bb = llvm::BasicBlock::Create(ctx, "null_check", current_bb->getParent());
+  llvm::BasicBlock* slow_bb = llvm::BasicBlock::Create(ctx, "slow_branch", current_bb->getParent());
+  llvm::BasicBlock* result_bb = llvm::BasicBlock::Create(ctx, "result", current_bb->getParent());
+
+  // ---------- if left == right ----------
+  llvm::Value* ptr_eq = b.CreateICmpEQ(left, right);
+  b.CreateCondBr(ptr_eq, result_bb, null_bb);
+
+  // ---------- if left == null || right == null ----------
+  b.SetInsertPoint(null_bb);
+
+  llvm::Value* null_const = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(left->getType()));
+  llvm::Value* is_null_left = b.CreateICmpEQ(left, null_const);
+  llvm::Value* is_null_right = b.CreateICmpEQ(right, null_const);
+
+  llvm::Value* any_null = b.CreateOr(is_null_left, is_null_right);
+  b.CreateCondBr(any_null, result_bb, slow_bb);
+
+  // ---------- check array length ----------
+  b.SetInsertPoint(slow_bb);
+
+  llvm::Value* left_length = _interp->call_java_op("jeandle.arraylength", {left});
+  llvm::Value* right_length = _interp->call_java_op("jeandle.arraylength", {right});
+
+  llvm::Value* len_equals = b.CreateICmpEQ(left_length, right_length);
+  
+  llvm::BasicBlock* memcmp_bb = llvm::BasicBlock::Create(ctx, "memcmp", 
+                                            current_bb->getParent());
+
+  b.CreateCondBr(len_equals, memcmp_bb, result_bb);
+
+  // ---------- if len(left) == len(right) ----------
+  b.SetInsertPoint(memcmp_bb);
+
+  llvm::Value* array_base_offset = b.getInt32(arrayOopDesc::base_offset_in_bytes(element_type));
+  llvm::Value* left_array_base = b.CreatePtrAdd(left, array_base_offset, "left_array_element_base");
+  llvm::Value* right_array_base = b.CreatePtrAdd(right, array_base_offset, "right_array_element_base");
+
+  llvm::Value* element_byte_size = llvm::ConstantInt::get(left_length->getType(),type2aelembytes(element_type));
+  llvm::Value* left_byte_length = b.CreateMul(element_byte_size, left_length);
+  if (left_byte_length->getType() != b.getInt64Ty()) left_byte_length = b.CreateIntCast(left_byte_length, b.getInt64Ty(), false);
+
+
+  llvm::Value* memcmp_result = _interp->call_java_op("jeandle.memcmp", {left_array_base, right_array_base, left_byte_length});
+  llvm::Value* is_equal = b.CreateICmpEQ(memcmp_result, 
+                                        llvm::ConstantInt::get(memcmp_result->getType(), 0));  
+
+  b.CreateBr(result_bb);
+  
+  b.SetInsertPoint(result_bb);
+  _interp->_block->set_tail_llvm_block(result_bb);
+  llvm::PHINode* phi = b.CreatePHI(b.getInt1Ty(), 4);
+  phi->addIncoming(llvm::ConstantInt::getTrue(ctx), current_bb);  // left == right -> true
+  phi->addIncoming(llvm::ConstantInt::getFalse(ctx), null_bb);    // any null -> false
+  phi->addIncoming(llvm::ConstantInt::getFalse(ctx), slow_bb);    // len(left) != len(right) -> false
+  phi->addIncoming(is_equal, memcmp_bb);                          // memcmp(left_base, right_base) == 0 -> true
+
+  llvm::Value* result = b.CreateIntCast(phi, b.getInt32Ty(), false);
+
+  _interp->_jvm->apop(); // right
+  _interp->_jvm->apop(); // left
+
+
+  _interp->_jvm->push(T_BOOLEAN, result);
+  
   return true;
 }
