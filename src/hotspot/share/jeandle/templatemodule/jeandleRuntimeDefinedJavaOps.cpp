@@ -192,7 +192,7 @@ DEF_JAVA_OP(allocation_prefetch, 1, llvm::Type::getVoidTy(context),
 
     if (AllocatePrefetchStyle == 2) {
       llvm::GlobalVariable* pf_top_offset_global =
-          template_module.getGlobalVariable("JavaThread.tlab_pf_top_offset");
+          template_module.getGlobalVariable("JavaThread.tlab_pf_top_offset", /*AllowInternal=*/true);
       llvm::Value* pf_top_offset = ir_builder.CreateLoad(
           ir_builder.getInt64Ty(), pf_top_offset_global);
       llvm::PointerType* tls_pointer_type =
